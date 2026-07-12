@@ -218,7 +218,7 @@ The methodology is an applied, CRISP-DM-based process with iterative development
 
 ### 4.1 Introduction
 
-This chapter analyses and designs the system before implementation: the functional and non-functional requirements, followed by use case, data flow, entity-relationship, sequence, and class models.
+This chapter analyses and designs the system before implementation: the functional and non-functional requirements, followed by use case, data flow, entity-relationship, sequence, activity, and class models.
 
 ### 4.2 Requirements Specifications
 
@@ -250,7 +250,87 @@ Two actors — **User** (register, enrol, log in) and **Admin** (authenticate, v
 
 *Figure 4.1 — Use Case Diagram.*
 
-### 4.4 Data Flow Diagram
+#### 4.3.1 Use Case Descriptions
+
+**UC-01 Register account**
+
+| Field | Description |
+|---|---|
+| Actor | User |
+| Precondition | User is not yet registered |
+| Main flow | 1. User submits a username and password. 2. System validates and hashes the credentials. 3. System creates the user record. |
+| Alternative | Username already exists → system rejects and prompts for another. |
+| Postcondition | A user account exists, ready for enrolment. |
+
+**UC-02 Enrol typing profile**
+
+| Field | Description |
+|---|---|
+| Actor | User |
+| Precondition | User is registered and logged in |
+| Main flow | 1. User types the fixed password. 2. System captures the timing vector (includes UC-04). 3. Steps repeat until N samples are collected. 4. System computes the mean/MAD profile and threshold and stores them. |
+| Alternative | Typo during typing → sample discarded, user re-types. |
+| Postcondition | A timing profile is stored for the user. |
+
+**UC-03 Log in / verify**
+
+| Field | Description |
+|---|---|
+| Actor | User |
+| Precondition | User has an enrolled profile |
+| Main flow | 1. User types the fixed password. 2. System captures the timing vector (includes UC-04). 3. System scores it against the profile (includes UC-05). 4. System accepts or rejects and logs the attempt. |
+| Alternative | No profile found → system asks the user to enrol first. |
+| Postcondition | Access is granted or denied, and the attempt is logged. |
+
+**UC-04 Capture keystroke timings** *(included)*
+
+| Field | Description |
+|---|---|
+| Actor | User (via browser) |
+| Precondition | The password field is focused |
+| Main flow | 1. Browser records keydown/keyup events. 2. It derives H, DD, and UD features. 3. It returns the ordered timing vector. |
+| Alternative | Incomplete input → vector rejected. |
+| Postcondition | A timing vector is available to the caller. |
+
+**UC-05 Score against profile** *(included)*
+
+| Field | Description |
+|---|---|
+| Actor | System |
+| Precondition | A profile and a timing vector exist |
+| Main flow | 1. System computes the scaled-Manhattan distance to the profile mean. 2. It compares the score with the threshold. 3. It returns accept or reject. |
+| Alternative | Malformed vector → error returned. |
+| Postcondition | A decision and score are produced. |
+
+**UC-06 Authenticate (admin)**
+
+| Field | Description |
+|---|---|
+| Actor | Admin |
+| Precondition | An admin account exists |
+| Main flow | 1. Admin submits credentials. 2. System verifies them against the admins table. 3. System opens an admin session. |
+| Alternative | Invalid credentials → access denied. |
+| Postcondition | Admin is authenticated for dashboard access. |
+
+**UC-07 View attempt log**
+
+| Field | Description |
+|---|---|
+| Actor | Admin |
+| Precondition | Admin is authenticated (includes UC-06) |
+| Main flow | 1. Admin opens the dashboard. 2. System reads the attempts table. 3. System displays user, time, score, and decision. |
+| Alternative | No attempts yet → empty list shown. |
+| Postcondition | The attempt log is displayed. |
+
+**UC-08 View statistics**
+
+| Field | Description |
+|---|---|
+| Actor | Admin |
+| Precondition | Admin is authenticated |
+| Main flow | 1. Admin requests statistics. 2. System aggregates attempts (total, rejection rate, recent flags). 3. System displays the summary. |
+| Alternative | No data → zero values shown. |
+| Postcondition | Summary statistics are displayed. |
 
 Modelled in Gane-Sarson notation with external entities (User, Admin), four processes (0 Enrol profile, 1 Capture timings, 2 Match & decide, 3 Serve dashboard), and three data stores (D1 Profiles, D2 Attempts, D3 Enrollment samples). The offline pipeline supplies the decision threshold only; its data never enters the live stores.
 
@@ -372,7 +452,45 @@ sequenceDiagram
 
 *Figure 4.5 — Verification Sequence Diagram.*
 
-### 4.7 Class Diagram
+### 4.7 Activity Diagrams
+
+**Enrolment** — the user types the password repeatedly until N samples are collected, after which the profile and threshold are computed and stored.
+
+```mermaid
+flowchart TD
+    A([Start]) --> B[Enter username]
+    B --> C[Type fixed password]
+    C --> D[Capture H/DD/UD vector]
+    D --> E{N samples<br/>collected?}
+    E -- No --> C
+    E -- Yes --> F[Compute mean + MAD profile]
+    F --> G[Derive threshold]
+    G --> H[(Store samples + profile)]
+    H --> I([End])
+```
+
+*Figure 4.6 — Enrolment Activity Diagram.*
+
+**Verification** — the entered password is captured, scored against the profile, and accepted or rejected on the threshold decision; either way the attempt is logged.
+
+```mermaid
+flowchart TD
+    A([Start]) --> B[Type fixed password]
+    B --> C[Capture timing vector]
+    C --> D[Send to backend]
+    D --> E[Load profile]
+    E --> F[Compute scaled-Manhattan score]
+    F --> G{score &le; threshold?}
+    G -- Yes --> H[Accept login]
+    G -- No --> I[Reject and flag]
+    H --> J[(Log attempt)]
+    I --> J
+    J --> K([End])
+```
+
+*Figure 4.7 — Verification Activity Diagram.*
+
+### 4.8 Class Diagram
 
 The design has five entity classes (User, Admin, EnrollmentSample, Profile, Attempt) and five service classes: **KeystrokeCapture** (derives H/DD/UD features from key events), **ScaledManhattanMatcher** (builds profiles, scores a vector, decides accept/reject), **AuthController** (register, enrol, verify), **AdminController** (authenticate, attempts, statistics), and **Repository** (persistence). Controllers depend on the matcher, capture, and repository; the matcher produces Profile objects.
 
@@ -452,11 +570,11 @@ classDiagram
     Repository ..> EnrollmentSample
 ```
 
-*Figure 4.6 — Class Diagram.*
+*Figure 4.8 — Class Diagram.*
 
-### 4.8 Summary
+### 4.9 Summary
 
-The system is specified through its functional and non-functional requirements and modelled with use case, data flow, ERD, sequence, and class diagrams. The design separates capture (browser), decision (Flask), and storage (SQLite), uses a six-table schema, and preserves the two-mode separation. Chapter 5 covers implementation and results.
+The system is specified through its functional and non-functional requirements and modelled with use case, data flow, ERD, sequence, activity, and class diagrams. The design separates capture (browser), decision (Flask), and storage (SQLite), uses a six-table schema, and preserves the two-mode separation. Chapter 5 covers implementation and results.
 
 ---
 
