@@ -32,6 +32,13 @@ python app.py
 
 The database (`demo.db`) and a seed admin are created automatically on first run.
 
+Optional — to show a populated dashboard from the start, seed synthetic data first
+(this resets `demo.db`):
+
+```bash
+python seed_demo.py
+```
+
 Admin dashboard: <http://127.0.0.1:5000/admin> — default login `admin` / `admin123`
 (change `ADMIN_PASSWORD` in `app.py`).
 
@@ -56,6 +63,7 @@ The backend owns the decision; the browser never scores anything.
 | `schema.sql` | The six tables: users, admins, enrollment_samples, profiles, attempts, sessions |
 | `templates/index.html` | Enroll + verify UI with keystroke capture |
 | `templates/admin.html` | Admin login + attempts dashboard |
+| `seed_demo.py` | Optional: fill the DB with synthetic users + attempts for a demo |
 
 ## Tuning
 
