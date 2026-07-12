@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Keystroke Dynamics Demo</title>
+<style>
+  :root { --bg:#0f1420; --card:#1a2130; --line:#2b3446; --ink:#e8edf5;
+          --muted:#93a0b5; --accent:#4a9eff; --ok:#2ecc71; --bad:#e74c3c; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+         background:var(--bg); color:var(--ink); line-height:1.5; }
+  .wrap { max-width:720px; margin:0 auto; padding:32px 20px 64px; }
+  h1 { font-size:1.5rem; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 28px; font-size:.95rem; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px;
+          padding:22px; margin-bottom:20px; }
+  .card h2 { margin:0 0 4px; font-size:1.12rem; }
+  .hint { color:var(--muted); font-size:.88rem; margin:0 0 16px; }
+  label { display:block; font-size:.85rem; color:var(--muted); margin:0 0 6px; }
+  input { width:100%; padding:11px 13px; font-size:1rem; border-radius:8px;
+          border:1px solid var(--line); background:#10151f; color:var(--ink);
+          font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+  input:focus { outline:none; border-color:var(--accent); }
+  .phrase { font-family:ui-monospace,Menlo,monospace; background:#10151f;
+            border:1px dashed var(--line); border-radius:6px; padding:2px 8px;
+            color:var(--accent); }
+  .row { display:flex; gap:12px; align-items:end; margin-bottom:14px; }
+  .row > div { flex:1; }
+  button { padding:11px 18px; border:none; border-radius:8px; background:var(--accent);
+           color:#08111f; font-weight:600; font-size:.95rem; cursor:pointer; }
+  button.ghost { background:transparent; color:var(--muted); border:1px solid var(--line); }
+  .progress { display:flex; gap:6px; margin:14px 0 4px; }
+  .dot { width:26px; height:8px; border-radius:4px; background:var(--line); }
+  .dot.filled { background:var(--accent); }
+  .msg { margin-top:14px; font-size:.92rem; min-height:1.2em; }
+  .msg.ok { color:var(--ok); } .msg.bad { color:var(--bad); }
+  .result { margin-top:16px; padding:14px; border-radius:8px; display:none; }
+  .result.show { display:block; }
+  .result.accept { background:rgba(46,204,113,.12); border:1px solid var(--ok); }
+  .result.reject { background:rgba(231,76,60,.12); border:1px solid var(--bad); }
+  .result .verdict { font-weight:700; font-size:1.05rem; }
+  .result .detail { color:var(--muted); font-size:.86rem; margin-top:4px; }
+  a.admin-link { color:var(--muted); font-size:.85rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Keystroke Dynamics — Live Demo</h1>
+  <p class="sub">Authentication by <em>how</em> you type, not just what you type.
+     Type the phrase <span class="phrase">{{ phrase }}</span> and press Enter each time.</p>
+
+  <!-- ENROLL -->
+  <div class="card">
+    <h2>1. Enroll</h2>
+    <p class="hint">Register a typing profile by typing the phrase
+       {{ required_samples }} times. Type naturally and consistently; avoid corrections.</p>
+    <div class="row">
+      <div>
+        <label>Username</label>
+        <input id="enroll-user" placeholder="e.g. alice" autocomplete="off">
+      </div>
+    </div>
+    <label>Type the phrase and press Enter</label>
+    <input id="enroll-input" placeholder="{{ phrase }}" autocomplete="off"
+           autocapitalize="off" autocorrect="off" spellcheck="false">
+    <div class="progress" id="enroll-progress"></div>
+    <div class="msg" id="enroll-msg"></div>
+  </div>
+
+  <!-- VERIFY -->
+  <div class="card">
+    <h2>2. Verify</h2>
+    <p class="hint">Type the phrase once. The server compares your rhythm to the
+       enrolled profile and accepts or rejects the login.</p>
+    <div class="row">
+      <div>
+        <label>Username</label>
+        <input id="verify-user" placeholder="e.g. alice" autocomplete="off">
+      </div>
+    </div>
+    <label>Type the phrase and press Enter</label>
+    <input id="verify-input" placeholder="{{ phrase }}" autocomplete="off"
+           autocapitalize="off" autocorrect="off" spellcheck="false">
+    <div class="msg" id="verify-msg"></div>
+    <div class="result" id="verify-result">
+      <div class="verdict"></div><div class="detail"></div>
+    </div>
+  </div>
+
+  <a class="admin-link" href="/admin">Admin dashboard →</a>
+</div>
+
+<script>
+const PHRASE = {{ phrase|tojson }};
+const REQUIRED = {{ required_samples }};
+
+// Keys that are not part of the typed phrase and must be ignored.
+const IGNORE = new Set(["ShiftLeft","ShiftRight","AltLeft","AltRight",
+  "ControlLeft","ControlRight","MetaLeft","MetaRight","CapsLock","Tab"]);
+
+// Build a stable feature-order label list once, so enroll and verify agree.
+// Layout mirrors the CMU features: H, DD, UD interleaved per key, plus a
+// trailing Enter key -> (3n - 2) features for n keys.
+function featureOrder(nKeys) {
+  const names = [];
+  for (let i = 0; i < nKeys; i++) {
+    names.push("H_" + i);
+    if (i < nKeys - 1) { names.push("DD_" + i + "_" + (i + 1));
+                         names.push("UD_" + i + "_" + (i + 1)); }
+  }
+  return names;
+}
+
+// Attach keystroke capture to an input. Calls onSample(features, order, typed)
+// when the user completes the phrase and presses Enter.
+function attachCapture(input, onSample) {
+  let events = [];               // {code, down, up}
+  const reset = () => { events = []; input.value = ""; };
+
+  input.addEventListener("keydown", (e) => {
+    if (e.repeat) return;
+    if (e.code === "Enter") { e.preventDefault(); recordDown("Enter", e.timeStamp); return; }
+    if (IGNORE.has(e.code)) return;
+    recordDown(e.code, e.timeStamp);
+  });
+
+  input.addEventListener("keyup", (e) => {
+    if (e.code === "Enter") { recordUp("Enter", e.timeStamp); finalize(); return; }
+    if (IGNORE.has(e.code)) return;
+    recordUp(e.code, e.timeStamp);
+  });
+
+  function recordDown(code, t) { events.push({ code, down: t, up: null }); }
+  function recordUp(code, t) {
+    for (let i = events.length - 1; i >= 0; i--)
+      if (events[i].code === code && events[i].up === null) { events[i].up = t; return; }
+  }
+
+  function finalize() {
+    const typed = input.value;
+    const complete = events.filter(ev => ev.up !== null);
+    const expected = PHRASE.length + 1;                 // + Enter
+    if (typed !== PHRASE || complete.length !== expected) {
+      onSample(null, null, typed);                      // signal a bad entry
+      reset();
+      return;
+    }
+    const n = complete.length;
+    const H = complete.map(ev => ev.up - ev.down);
+    const feats = [];
+    for (let i = 0; i < n; i++) {
+      feats.push(H[i]);
+      if (i < n - 1) {
+        feats.push(complete[i + 1].down - complete[i].down);   // DD
+        feats.push(complete[i + 1].down - complete[i].up);     // UD
+      }
+    }
+    onSample(feats, featureOrder(n), typed);
+    reset();
+  }
+}
+
+// ---- Enroll wiring --------------------------------------------------------
+const enrollInput = document.getElementById("enroll-input");
+const enrollMsg   = document.getElementById("enroll-msg");
+const progress    = document.getElementById("enroll-progress");
+let enrollSamples = [];
+let enrollOrder   = null;
+
+function drawProgress() {
+  progress.innerHTML = "";
+  for (let i = 0; i < REQUIRED; i++) {
+    const d = document.createElement("div");
+    d.className = "dot" + (i < enrollSamples.length ? " filled" : "");
+    progress.appendChild(d);
+  }
+}
+drawProgress();
+
+attachCapture(enrollInput, async (feats, order, typed) => {
+  if (!feats) {
+    enrollMsg.className = "msg bad";
+    enrollMsg.textContent = "Entry didn't match the phrase — try again, no corrections.";
+    return;
+  }
+  enrollSamples.push(feats);
+  enrollOrder = order;
+  drawProgress();
+  enrollMsg.className = "msg";
+  enrollMsg.textContent = `Captured ${enrollSamples.length} / ${REQUIRED}.`;
+
+  if (enrollSamples.length >= REQUIRED) {
+    const user = document.getElementById("enroll-user").value.trim();
+    if (!user) { enrollMsg.className = "msg bad";
+                 enrollMsg.textContent = "Enter a username first."; enrollSamples = [];
+                 drawProgress(); return; }
+    const resp = await fetch("/api/enroll", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: user, samples: enrollSamples,
+                             feature_order: enrollOrder }),
+    });
+    const out = await resp.json();
+    if (resp.ok) { enrollMsg.className = "msg ok";
+      enrollMsg.textContent = `Enrolled "${user}" from ${out.n_samples} samples. You can verify now.`;
+    } else { enrollMsg.className = "msg bad"; enrollMsg.textContent = out.error || "Enrollment failed."; }
+    enrollSamples = []; drawProgress();
+  }
+});
+
+// ---- Verify wiring --------------------------------------------------------
+const verifyInput  = document.getElementById("verify-input");
+const verifyMsg    = document.getElementById("verify-msg");
+const verifyResult = document.getElementById("verify-result");
+
+attachCapture(verifyInput, async (feats, order, typed) => {
+  verifyResult.className = "result";
+  if (!feats) {
+    verifyMsg.className = "msg bad";
+    verifyMsg.textContent = "Entry didn't match the phrase — try again, no corrections.";
+    return;
+  }
+  const user = document.getElementById("verify-user").value.trim();
+  if (!user) { verifyMsg.className = "msg bad";
+               verifyMsg.textContent = "Enter a username first."; return; }
+  verifyMsg.className = "msg"; verifyMsg.textContent = "Checking…";
+
+  const resp = await fetch("/api/verify", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: user, sample: feats, feature_order: order }),
+  });
+  const out = await resp.json();
+  verifyMsg.textContent = "";
+  if (!resp.ok && resp.status === 404) {
+    verifyResult.className = "result reject show";
+    verifyResult.querySelector(".verdict").textContent = "No profile found";
+    verifyResult.querySelector(".detail").textContent =
+      `Enroll "${user}" first, then verify.`;
+    return;
+  }
+  const accepted = out.accepted;
+  verifyResult.className = "result show " + (accepted ? "accept" : "reject");
+  verifyResult.querySelector(".verdict").textContent =
+    accepted ? "✓ Accepted — you type like the enrolled user" :
+               "✗ Rejected — typing rhythm doesn't match";
+  verifyResult.querySelector(".detail").textContent =
+    `distance ${out.score} vs threshold ${out.threshold} (lower = closer match)`;
+});
+</script>
+</body>
+</html>
