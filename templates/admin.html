@@ -68,23 +68,7 @@
 {% else %}
 <!-- ===================================================== DASHBOARD -->
 <div class="shell">
-  <aside class="side">
-    <a class="brand" href="/admin/dashboard">
-      <span class="mark">◈</span><span class="brand-name">Sentinel</span>
-    </a>
-    <a class="navitem active" href="/admin/dashboard"><span class="ic">▤</span>Overview</a>
-    <a class="navitem" href="#users"><span class="ic">◇</span>Users</a>
-    <a class="navitem" href="#events"><span class="ic">≋</span>Auth events</a>
-    <a class="navitem" href="/admin/policy"><span class="ic">⛨</span>Policy</a>
-    <a class="navitem" href="/"><span class="ic">◈</span>Live demo</a>
-    <div class="side-foot">
-      <div class="avatar">{{ admin[:2]|upper }}</div>
-      <div>
-        <div class="who-name">{{ admin }}</div>
-        <div class="who-role">Security admin</div>
-      </div>
-    </div>
-  </aside>
+  {% set nav = 'overview' %}{% include "_sidebar.html" %}
 
   <main class="main">
     <div class="main-head">
@@ -148,7 +132,7 @@
         <div class="box" id="users">
           <div class="box-head">
             <span class="t">Enrolled users</span>
-            <span class="n">{{ users|length }} of {{ stats.users }} shown</span>
+            <a class="n" href="/admin/users">{{ users|length }} of {{ stats.users }} shown · view all →</a>
           </div>
           {% if users %}
           <table>
@@ -185,7 +169,7 @@
         <div class="box" id="events">
           <div class="box-head">
             <span class="t">Recent verification attempts</span>
-            <span class="n">latest {{ attempts|length }}</span>
+            <a class="n" href="/admin/events">latest {{ attempts|length }} · view all →</a>
           </div>
           {% if attempts %}
           <table>
@@ -215,7 +199,7 @@
       <div class="box">
         <div class="box-head">
           <span class="t">Intrusion alerts</span>
-          <span class="n">≥ {{ fail_lock_streak }} fails</span>
+          <a class="n" href="/admin/alerts">≥ {{ fail_lock_streak }} fails · view all →</a>
         </div>
         {% if alerts %}
           {% for a in alerts %}

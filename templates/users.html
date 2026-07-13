@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Users — Sentinel</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='sentinel.css') }}">
+</head>
+<body>
+
+<div class="shell">
+  {% set nav = 'users' %}{% include "_sidebar.html" %}
+
+  <main class="main">
+    <div class="main-head">
+      <div>
+        <h2>Users</h2>
+        <div class="sub">Every enrolled profile, its accept rate and its current lock state.</div>
+      </div>
+      <span class="chip">{{ total }} MATCHING</span>
+    </div>
+
+    <form class="filterbar" method="get" action="/admin/users">
+      <input class="input" type="search" name="q" value="{{ q }}" placeholder="Search username…"
+             autocomplete="off" spellcheck="false">
+      <div class="tabs">
+        {% for key, label in [('all', 'All'), ('enrolled', 'Enrolled'),
+                              ('locked', 'Locked'), ('noprofile', 'No profile')] %}
+          <a class="tab {% if status == key %}on{% endif %}"
+             href="/admin/users?status={{ key }}{% if q %}&q={{ q|urlencode }}{% endif %}">{{ label }}</a>
+        {% endfor %}
+      </div>
+      <button class="btn btn-ghost btn-sm" type="submit">Search</button>
+      {% if q or status != 'all' %}
+        <a class="btn btn-ghost btn-sm" href="/admin/users">Clear</a>
+      {% endif %}
+    </form>
+
+    <div class="box">
+      <div class="box-head">
+        <span class="t">Enrolled users</span>
+        <span class="n">page {{ page }} of {{ pages }}</span>
+      </div>
+
+      {% if users %}
+      <table>
+        <thead>
+          <tr>
+            <th>USER</th><th>STATUS</th><th>SAMPLES</th><th>THRESHOLD</th>
+            <th>ATTEMPTS</th><th>ACCEPT RATE</th><th>LAST SEEN</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for u in users %}
+          <tr>
+            <td>
+              <a class="userlink" href="/admin/user/{{ u.username }}">
+                <span class="av {% if u.locked %}locked{% endif %}">{{ u.username[:2]|upper }}</span>
+                <span>{{ u.username }}</span>
+              </a>
+            </td>
+            <td>
+              {% if u.locked %}
+                <span class="pill reject">LOCKED · {{ (u.remaining // 60) + 1 }}M</span>
+              {% elif u.n_samples %}<span class="pill accept">ENROLLED</span>
+              {% else %}<span class="pill suspicious">NO PROFILE</span>{% endif %}
+            </td>
+            <td class="mono">{{ u.n_samples or "—" }}</td>
+            <td class="mono">{{ "%.2f"|format(u.threshold) if u.threshold is not none else "—" }}</td>
+            <td class="mono">{{ u.n_attempts }}</td>
+            <td>
+              {% if u.accept_rate is not none %}
+                <div class="ratecell">
+                  <div class="meter">
+                    <div class="meter-fill {% if u.accept_rate >= 60 %}ok{% elif u.accept_rate >= 30 %}warn{% else %}bad{% endif %}"
+                         style="width:{{ u.accept_rate }}%"></div>
+                  </div>
+                  <span class="mono-label">{{ u.accept_rate }}%</span>
+                </div>
+              {% else %}<span class="mono-label">NO DATA</span>{% endif %}
+            </td>
+            <td class="time">{{ u.last_seen[:19].replace("T", " ") if u.last_seen else "never" }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+        <div class="empty">
+          {% if q or status != 'all' %}No users match this filter.
+            <a href="/admin/users">Clear it →</a>
+          {% else %}No users enrolled yet. <a href="/">Run the demo →</a>{% endif %}
+        </div>
+      {% endif %}
+    </div>
+
+    {% if pages > 1 %}
+    {% set qs = 'q=' ~ q|urlencode ~ '&status=' ~ status %}
+    <div class="pager">
+      {% if page > 1 %}
+        <a class="btn btn-ghost btn-xs" href="/admin/users?{{ qs }}&page={{ page - 1 }}">← Prev</a>
+      {% endif %}
+      <span class="mono-label">PAGE {{ page }} / {{ pages }}</span>
+      {% if page < pages %}
+        <a class="btn btn-ghost btn-xs" href="/admin/users?{{ qs }}&page={{ page + 1 }}">Next →</a>
+      {% endif %}
+    </div>
+    {% endif %}
+  </main>
+</div>
+
+</body>
+</html>

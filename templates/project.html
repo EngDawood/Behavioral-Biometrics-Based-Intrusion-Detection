@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The project — Sentinel</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='sentinel.css') }}">
+</head>
+<body>
+
+<header class="nav">
+  <a class="brand" href="/">
+    <span class="mark">◈</span><span class="brand-name">Sentinel</span>
+  </a>
+  <nav class="nav-links">
+    <a href="/about">How it works</a>
+    <a href="/project">The project</a>
+    <a href="/#how">Platform</a>
+    <a href="/#flow">Demo</a>
+  </nav>
+  <div class="nav-cta">
+    <a class="quiet" href="/admin">Sign in</a>
+    <a class="btn btn-accent btn-sm" href="/#flow">Try it now</a>
+  </div>
+</header>
+
+<section class="hero">
+  <div class="gridbg" aria-hidden="true"></div>
+  <div class="prose">
+    <div class="eyebrow">◈ THE PROJECT</div>
+    <h1 class="prose-h1">Behavioral Biometrics-Based<br>Intrusion Detection.</h1>
+    <p class="lede">A keystroke-dynamics authentication system that detects intruders. Sentinel is the
+      working prototype of this project — it profiles the millisecond rhythm of a user's typing and
+      scores every later login attempt against that profile.</p>
+  </div>
+</section>
+
+<!-- team -->
+<section class="how">
+  <h2>Team</h2>
+  <p class="section-lede">Built by four undergraduate students of the Cyber Security programme.</p>
+
+  <div class="steps">
+    <div class="step-row">
+      <div class="num">01</div>
+      <div>
+        <div class="panel-t">Saad Hadi Ayed Alqahtani</div>
+        <div class="panel-d">Student ID <em>444803397</em></div>
+      </div>
+    </div>
+    <div class="step-row">
+      <div class="num">02</div>
+      <div>
+        <div class="panel-t">Mohammed Nazhan Thaqal Alqahtani</div>
+        <div class="panel-d">Student ID <em>444801451</em></div>
+      </div>
+    </div>
+    <div class="step-row">
+      <div class="num">03</div>
+      <div>
+        <div class="panel-t">Fahad Nazhan Thaqal Alqahtani</div>
+        <div class="panel-d">Student ID <em>444801511</em></div>
+      </div>
+    </div>
+    <div class="step-row">
+      <div class="num">04</div>
+      <div>
+        <div class="panel-t">Khalid Munees Mishal Alqahtani</div>
+        <div class="panel-d">Student ID <em>444801502</em></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- supervision and submission -->
+<section class="how">
+  <h2>Supervision &amp; submission</h2>
+
+  <div class="panel credits">
+    <img class="uni-logo"
+         src="https://bf5a0c8d48ca087745ff-5d297cdd9ffc2629bfe583fdf30af1c0.ssl.cf3.rackcdn.com/5ecf597d-a47f-44b5-9854-d5c7ff8c70bf.png"
+         alt="Bisha University">
+    <div class="credits-body">
+      <div class="kvrow">
+        <div class="kv">
+          <div class="k">SUPERVISED BY</div>
+          <div class="v">Mukhtar Mahmoud Yahya Ghalib</div>
+        </div>
+        <div class="kv">
+          <div class="k">ACADEMIC YEAR</div>
+          <div class="v">2026 / 1447-1448 (Semester-2)</div>
+        </div>
+      </div>
+      <div class="note">
+        <span>Submitted to Bisha University in fulfilment of the requirements for the B.Sc. Degree in
+          Cyber Security. Academic Year 2026 / 1447-1448 (Semester-2).</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer class="foot">
+  <span>◈ Sentinel · behavioral biometrics</span>
+  <span><a href="/admin">Admin</a> · keystroke dynamics IDS</span>
+</footer>
+
+</body>
+</html>

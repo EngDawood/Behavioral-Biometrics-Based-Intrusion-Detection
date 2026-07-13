@@ -1,0 +1,41 @@
+{# Admin shell navigation.
+
+   Included by every signed-in admin screen. The caller sets `nav` to the key of
+   the page it is on, which is the only thing that varies:
+
+       {% set nav = 'users' %}{% include "_sidebar.html" %}
+
+   `admin` (the signed-in username) is optional -- the footer is skipped without
+   it -- so the partial also works on screens that do not load an admin row. #}
+<aside class="side">
+  <a class="brand" href="/admin/dashboard">
+    <span class="mark">◈</span><span class="brand-name">Sentinel</span>
+  </a>
+
+  {% for item in [
+      ('overview',  '/admin/dashboard', '▤', 'Overview'),
+      ('users',     '/admin/users',     '◇', 'Users'),
+      ('events',    '/admin/events',    '≋', 'Auth events'),
+      ('alerts',    '/admin/alerts',    '⚠', 'Alerts'),
+      ('analytics', '/admin/analytics', '◫', 'Analytics'),
+      ('policy',    '/admin/policy',    '⛨', 'Policy'),
+      ('demo',      '/',                '◈', 'Live demo'),
+  ] %}
+    <a class="navitem {% if nav == item[0] %}active{% endif %}" href="{{ item[1] }}">
+      <span class="ic">{{ item[2] }}</span>{{ item[3] }}
+      {% if item[0] == 'alerts' and open_alerts %}
+        <span class="navbadge">{{ open_alerts }}</span>
+      {% endif %}
+    </a>
+  {% endfor %}
+
+  {% if admin %}
+  <div class="side-foot">
+    <div class="avatar">{{ admin[:2]|upper }}</div>
+    <div>
+      <div class="who-name">{{ admin }}</div>
+      <div class="who-role">Security admin</div>
+    </div>
+  </div>
+  {% endif %}
+</aside>

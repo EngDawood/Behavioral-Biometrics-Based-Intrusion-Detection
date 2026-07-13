@@ -36,6 +36,11 @@
 
 * { box-sizing: border-box; }
 
+/* The UI toggles steps and messages with [hidden]. Several of them carry a class
+   that sets `display`, which would otherwise out-rank the browser's default
+   `[hidden] { display: none }` and leave them stuck on screen. */
+[hidden] { display: none !important; }
+
 body {
   margin: 0;
   background: var(--bg);
@@ -714,6 +719,205 @@ td.time { font: 400 11.5px var(--mono); color: var(--ink-3); }
 }
 
 /* ==========================================================================
+   Listing screens — users, auth events, alerts
+   ========================================================================== */
+.navbadge {
+  margin-left: auto;
+  font: 600 9.5px var(--mono);
+  color: oklch(0.98 0.01 250);
+  background: var(--bad);
+  border-radius: 20px;
+  padding: 1px 7px;
+}
+
+.filterbar {
+  display: flex; align-items: center; gap: 10px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+.filterbar .input { flex: 1; min-width: 200px; width: auto; padding: 9px 13px; font-size: 13.5px; }
+
+.tabs {
+  display: flex; gap: 4px;
+  background: oklch(0.135 0.016 262);
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  padding: 4px;
+}
+.tabs-wide { display: inline-flex; margin-bottom: 14px; }
+.tab {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 7px 13px;
+  border-radius: 8px;
+  font: 500 12.5px var(--body);
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.tab:hover { color: var(--ink); background: oklch(0.18 0.02 262); }
+.tab.on { color: var(--ink); background: oklch(0.22 0.03 262); }
+.tab .tab-n {
+  font: 600 10px var(--mono);
+  color: var(--ink-3);
+  background: oklch(0.11 0.02 260);
+  border-radius: 20px;
+  padding: 1px 6px;
+}
+.tab.on.accept     { color: var(--ok); }
+.tab.on.suspicious { color: var(--warn); }
+.tab.on.reject     { color: var(--bad); }
+
+.pager {
+  display: flex; align-items: center; justify-content: center; gap: 14px;
+  margin: 4px 0 18px;
+}
+
+.ratecell { display: flex; align-items: center; gap: 9px; }
+.ratecell .meter { width: 62px; flex: none; height: 6px; }
+
+td.mono.accept     { color: var(--ok); }
+td.mono.suspicious { color: var(--warn); }
+td.mono.reject     { color: var(--bad); }
+
+.alert-row .alert-actions { display: flex; align-items: center; gap: 8px; flex: none; }
+.alert-row.muted { opacity: .55; }
+
+/* ==========================================================================
+   Analytics
+   ========================================================================== */
+.chart-note {
+  font: 400 12.5px/1.6 var(--body);
+  color: oklch(0.62 0.02 250);
+  margin: 0 0 18px;
+}
+.chart-note strong { color: var(--ink); font-family: var(--mono); font-size: 12px; }
+
+.hist { display: flex; flex-direction: column; gap: 7px; }
+.hist-row { display: flex; align-items: center; gap: 11px; }
+.hist-label { width: 62px; flex: none; text-align: right; }
+.hist-n     { width: 34px; flex: none; color: var(--ink-2); }
+.hist-track {
+  flex: 1;
+  height: 18px;
+  border-radius: 4px;
+  background: oklch(0.135 0.016 262);
+  border: 1px solid var(--line-soft);
+  overflow: hidden;
+}
+.hist-bar {
+  height: 100%;
+  min-width: 2px;
+  border-radius: 3px;
+  transition: width .35s ease;
+}
+.hist-bar.accept     { background: var(--ok);   box-shadow: 0 0 10px oklch(0.6 0.14 155 / .35); }
+.hist-bar.suspicious { background: var(--warn); box-shadow: 0 0 10px oklch(0.6 0.13 70 / .35); }
+.hist-bar.reject     { background: var(--bad);  box-shadow: 0 0 10px oklch(0.6 0.19 25 / .35); }
+
+.swatch {
+  display: inline-block;
+  width: 8px; height: 8px;
+  border-radius: 2px;
+  margin-right: 5px;
+}
+.swatch.ok   { background: var(--ok); }
+.swatch.warn { background: var(--warn); }
+.swatch.bad  { background: var(--bad); }
+
+.tl { display: flex; align-items: flex-end; gap: 6px; height: 150px; }
+.tl-col { flex: 1; display: flex; flex-direction: column; height: 100%; min-width: 0; }
+.tl-stack {
+  flex: 1;
+  display: flex; flex-direction: column; justify-content: flex-end;
+  gap: 2px;
+  background: oklch(0.135 0.016 262);
+  border-radius: 5px 5px 0 0;
+  overflow: hidden;
+}
+.tl-seg { width: 100%; min-height: 0; border-radius: 3px 3px 0 0; }
+.tl-seg.ok  { background: var(--ok); }
+.tl-seg.bad { background: var(--bad); }
+.tl-day {
+  text-align: center;
+  margin-top: 7px;
+  font-size: 8.5px;
+  white-space: nowrap;
+}
+
+.mixbar {
+  display: flex;
+  height: 12px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: oklch(0.135 0.016 262);
+}
+.mix-seg { height: 100%; }
+.mix-seg.ok   { background: var(--ok); }
+.mix-seg.warn { background: var(--warn); }
+.mix-seg.bad  { background: var(--bad); }
+.mix-keys { margin-top: 16px; display: flex; flex-direction: column; gap: 10px; }
+.mix-key { display: flex; align-items: center; }
+.mix-label { font: 500 12.5px var(--body); color: var(--ink-2); }
+.mix-val {
+  margin-left: auto;
+  font: 600 11.5px var(--mono);
+  color: var(--ink);
+}
+
+/* ==========================================================================
+   About — public explainer
+   ========================================================================== */
+.prose {
+  position: relative;
+  max-width: 1200px; margin: 0 auto;
+  padding: 72px 40px 60px;
+}
+.prose-h1 {
+  font: 600 46px/1.08 var(--display);
+  letter-spacing: -.03em;
+  margin: 0 0 22px;
+  color: oklch(0.98 0.01 250);
+}
+.section-lede {
+  font: 400 15px/1.7 var(--body);
+  color: var(--ink-2);
+  max-width: 660px;
+  margin: -22px 0 36px;
+}
+.inline-code {
+  font: 500 14px var(--mono);
+  color: var(--accent);
+  background: oklch(0.12 0.02 260);
+  border: 1px dashed oklch(0.36 0.04 240);
+  border-radius: 6px;
+  padding: 2px 7px;
+}
+.steps { display: flex; flex-direction: column; gap: 14px; }
+.step-row {
+  display: flex; gap: 20px;
+  background: oklch(0.165 0.018 262);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 22px 26px;
+}
+.step-row .num { margin-bottom: 0; flex: none; }
+.step-row .panel-d { max-width: 760px; margin-top: 5px; }
+.step-row em { color: var(--ink); font-style: normal; font-family: var(--mono); font-size: 13px; }
+
+/* ==========================================================================
+   Project — academic credits
+   ========================================================================== */
+.credits { display: flex; gap: 28px; align-items: center; }
+.credits-body { flex: 1; min-width: 0; }
+.credits .note { margin-top: 18px; }
+.uni-logo {
+  flex: none;
+  width: 128px; height: auto;
+  border-radius: 12px;
+  background: oklch(0.98 0.01 250);
+  padding: 12px;
+}
+
+/* ==========================================================================
    Responsive
    ========================================================================== */
 @media (max-width: 1080px) {
@@ -730,4 +934,15 @@ td.time { font: 400 11.5px var(--mono); color: var(--ink-3); }
   .main { padding: 24px 18px 48px; }
   .setting { flex-direction: column; align-items: flex-start; gap: 12px; }
   .setting .control { width: 100%; }
+
+  .prose { padding: 56px 24px 48px; }
+  .prose-h1 { font-size: 34px; }
+  .step-row { flex-direction: column; gap: 14px; }
+  .credits { flex-direction: column; align-items: flex-start; gap: 20px; }
+  .filterbar .input { min-width: 100%; }
+  .tabs { overflow-x: auto; }
+  .alert-row { flex-wrap: wrap; }
+  /* Tables carry more columns than a phone can show; let them scroll instead
+     of forcing the page body sideways. */
+  .box table { display: block; overflow-x: auto; white-space: nowrap; }
 }

@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Analytics — Sentinel</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='sentinel.css') }}">
+</head>
+<body>
+
+<div class="shell">
+  {% set nav = 'analytics' %}{% include "_sidebar.html" %}
+
+  <main class="main">
+    <div class="main-head">
+      <div>
+        <h2>Analytics</h2>
+        <div class="sub">How the scaled-Manhattan detector is behaving across every logged attempt.</div>
+      </div>
+      <button class="btn btn-ghost btn-sm" onclick="location.reload()">Refresh</button>
+    </div>
+
+    {% if not total %}
+      <div class="box">
+        <div class="empty">No attempts logged yet — nothing to analyse.
+          <a href="/">Run the demo →</a></div>
+      </div>
+    {% else %}
+
+    <div class="statgrid">
+      <div class="statcard">
+        <div class="l">TOTAL ATTEMPTS</div>
+        <div class="n">{{ total }}</div>
+        <div class="d">{{ scored }} scored against a profile</div>
+      </div>
+      <div class="statcard">
+        <div class="l">ACCEPTED</div>
+        <div class="n ok">{{ band_pct.accept }}%</div>
+        <div class="d">{{ bands.accept }} attempts</div>
+      </div>
+      <div class="statcard">
+        <div class="l">SUSPICIOUS</div>
+        <div class="n warn">{{ band_pct.suspicious }}%</div>
+        <div class="d">{{ bands.suspicious }} in the margin band</div>
+      </div>
+      <div class="statcard">
+        <div class="l">REJECTED</div>
+        <div class="n bad">{{ band_pct.reject }}%</div>
+        <div class="d">{{ bands.reject }} attempts</div>
+      </div>
+      <div class="statcard {% if intrusions %}alarm{% endif %}">
+        <div class="l">MEAN MARGIN</div>
+        <div class="n">{% if mean_ratio %}×{{ "%.2f"|format(mean_ratio) }}{% else %}—{% endif %}</div>
+        <div class="d">{{ intrusions }} intrusions raised</div>
+      </div>
+    </div>
+
+    <div class="cols">
+      <div>
+        <!-- score / threshold distribution -->
+        <div class="box">
+          <div class="box-head">
+            <span class="t">Distance relative to threshold</span>
+            <span class="n">{{ scored }} scored attempts</span>
+          </div>
+          <div class="box-body">
+            <p class="chart-note">Each attempt's distance divided by that user's accept threshold.
+              Everything left of <strong>×1.00</strong> was accepted. A distribution that hugs the
+              boundary means the policy has little headroom; a clean gap means genuine users and
+              impostors are well separated.</p>
+
+            <div class="hist">
+              {% for h in histogram %}
+              <div class="hist-row">
+                <span class="hist-label mono-label">{{ h.label }}</span>
+                <div class="hist-track">
+                  <div class="hist-bar {{ h.band }}" style="width:{{ h.pct }}%"></div>
+                </div>
+                <span class="hist-n mono-label">{{ h.count }}</span>
+              </div>
+              {% endfor %}
+            </div>
+
+            <div class="viz-legend">
+              <span>◀ ACCEPT · ×1.00 BOUNDARY</span>
+              <span>SUSPICIOUS TO ×{{ "%.2f"|format(suspicious_margin) }} · REJECT ▶</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- daily volume -->
+        <div class="box">
+          <div class="box-head">
+            <span class="t">Daily volume</span>
+            <span class="n">last {{ timeline|length }} active days</span>
+          </div>
+          <div class="box-body">
+            <div class="tl">
+              {% for d in timeline %}
+              <div class="tl-col" title="{{ d.day }} · {{ d.accept }} accepted, {{ d.fail }} failed">
+                <div class="tl-stack">
+                  <div class="tl-seg bad"  style="height:{{ d.fail_pct }}%"></div>
+                  <div class="tl-seg ok"   style="height:{{ d.accept_pct }}%"></div>
+                </div>
+                <div class="tl-day mono-label">{{ d.day }}</div>
+              </div>
+              {% endfor %}
+            </div>
+            <div class="viz-legend">
+              <span><span class="swatch ok"></span> ACCEPTED</span>
+              <span><span class="swatch bad"></span> FAILED</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- decision mix + riskiest users -->
+      <div>
+        <div class="box">
+          <div class="box-head">
+            <span class="t">Decision mix</span>
+            <span class="n">all attempts</span>
+          </div>
+          <div class="box-body">
+            <div class="mixbar">
+              <div class="mix-seg ok"   style="width:{{ band_pct.accept }}%"></div>
+              <div class="mix-seg warn" style="width:{{ band_pct.suspicious }}%"></div>
+              <div class="mix-seg bad"  style="width:{{ band_pct.reject }}%"></div>
+            </div>
+            <div class="mix-keys">
+              {% for key, label, count, pct in [
+                  ('ok',   'Accepted',   bands.accept,     band_pct.accept),
+                  ('warn', 'Suspicious', bands.suspicious, band_pct.suspicious),
+                  ('bad',  'Rejected',   bands.reject,     band_pct.reject)] %}
+              <div class="mix-key">
+                <span class="swatch {{ key }}"></span>
+                <span class="mix-label">{{ label }}</span>
+                <span class="mix-val mono">{{ count }} · {{ pct }}%</span>
+              </div>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+
+        <div class="box">
+          <div class="box-head">
+            <span class="t">Most failures</span>
+            <span class="n">top {{ risky|length }}</span>
+          </div>
+          {% if risky %}
+            {% for u in risky %}
+            <div class="event">
+              <span class="dot-led {% if u.fail_rate >= 70 %}reject
+                                   {% elif u.fail_rate >= 40 %}suspicious
+                                   {% else %}accept{% endif %}"></span>
+              <div class="who">
+                <div class="n"><a href="/admin/user/{{ u.username }}">{{ u.username }}</a></div>
+                <div class="w">{{ u.fails }} failed of {{ u.n }} attempts</div>
+              </div>
+              <div class="right">
+                <div class="v {% if u.fail_rate >= 70 %}bad{% elif u.fail_rate >= 40 %}warn{% else %}ok{% endif %}">
+                  {{ u.fail_rate }}%
+                </div>
+                <div class="t">fail rate</div>
+              </div>
+            </div>
+            {% endfor %}
+          {% else %}
+            <div class="empty">No failed attempts on record.</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    {% endif %}
+  </main>
+</div>
+
+</body>
+</html>

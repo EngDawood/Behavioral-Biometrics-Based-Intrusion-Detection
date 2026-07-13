@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How it works — Sentinel</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='sentinel.css') }}">
+</head>
+<body>
+
+<header class="nav">
+  <a class="brand" href="/">
+    <span class="mark">◈</span><span class="brand-name">Sentinel</span>
+  </a>
+  <nav class="nav-links">
+    <a href="/about">How it works</a>
+    <a href="/#how">Platform</a>
+    <a href="/#flow">Demo</a>
+  </nav>
+  <div class="nav-cta">
+    <a class="quiet" href="/admin">Sign in</a>
+    <a class="btn btn-accent btn-sm" href="/#flow">Try it now</a>
+  </div>
+</header>
+
+<section class="hero">
+  <div class="gridbg" aria-hidden="true"></div>
+  <div class="prose">
+    <div class="eyebrow">◈ HOW IT WORKS</div>
+    <h1 class="prose-h1">Typing rhythm as<br>a second factor.</h1>
+    <p class="lede">A password proves you know a secret. Keystroke dynamics proves you are the person
+      who normally types it. Sentinel measures the millisecond timing of your typing, builds a
+      statistical profile of it, and scores every later attempt against that profile.</p>
+  </div>
+</section>
+
+<!-- what gets measured -->
+<section class="how">
+  <h2>What gets measured</h2>
+  <p class="section-lede">You type the phrase <code class="inline-code">{{ phrase }}</code>. The
+    browser records the timestamp of every key press and release — never the characters themselves
+    on their own — and turns them into {{ n_features }} timing features.</p>
+
+  <div class="how-grid">
+    <div class="panel">
+      <div class="num">H</div>
+      <div class="panel-t">Hold time</div>
+      <div class="panel-d">How long a single key stays down — press to release. Also called dwell.
+        One value per key in the phrase.</div>
+    </div>
+    <div class="panel">
+      <div class="num">DD</div>
+      <div class="panel-t">Down-down</div>
+      <div class="panel-d">The gap between pressing one key and pressing the next. Captures your
+        overall pace through a digraph.</div>
+    </div>
+    <div class="panel">
+      <div class="num">UD</div>
+      <div class="panel-t">Up-down</div>
+      <div class="panel-d">The gap between releasing one key and pressing the next. Goes negative
+        when a fast typist overlaps keys.</div>
+    </div>
+  </div>
+</section>
+
+<!-- the decision path -->
+<section class="how">
+  <h2>How a decision is made</h2>
+  <p class="section-lede">Every step below runs on the server. The browser only captures raw timings —
+    it never scores, and it never decides.</p>
+
+  <div class="steps">
+    <div class="step-row">
+      <div class="num">1</div>
+      <div>
+        <div class="panel-t">Enroll</div>
+        <div class="panel-d">You type the phrase {{ required_samples }} times. Sentinel takes the
+          mean and standard deviation of each timing feature across those repetitions — that pair is
+          your profile.</div>
+      </div>
+    </div>
+    <div class="step-row">
+      <div class="num">2</div>
+      <div>
+        <div class="panel-t">Score</div>
+        <div class="panel-d">A new attempt is compared with the <strong>scaled-Manhattan
+          distance</strong>: for each feature, how far it lands from your mean, divided by how much
+          you normally vary on it. Features you are consistent about count for more. The distances
+          are summed into one number.</div>
+      </div>
+    </div>
+    <div class="step-row">
+      <div class="num">3</div>
+      <div>
+        <div class="panel-t">Compare against your threshold</div>
+        <div class="panel-d">Your accept boundary is <em>mean + {{ "%.1f"|format(threshold_k) }}σ</em>
+          of your own leave-one-out enrollment scores — so it is calibrated to you, not to a global
+          constant. A steady typist gets a tight threshold; an erratic one gets a looser one.</div>
+      </div>
+    </div>
+    <div class="step-row">
+      <div class="num">4</div>
+      <div>
+        <div class="panel-t">Decide in three tiers</div>
+        <div class="panel-d">At or under the threshold is <span class="ok">accepted</span>. Up to
+          ×{{ "%.2f"|format(suspicious_margin) }} of it is <span class="warn">suspicious</span> —
+          close enough to be you having an off day, close enough to be someone else. Beyond that is
+          <span class="bad">rejected</span>.</div>
+      </div>
+    </div>
+    <div class="step-row">
+      <div class="num">5</div>
+      <div>
+        <div class="panel-t">Detect intrusion</div>
+        <div class="panel-d">{{ fail_lock_streak }} consecutive non-accepted attempts is not bad
+          luck — it is someone guessing. The account is flagged as an intrusion and frozen for
+          {{ lock_cooldown_min }} minutes. A locked account is refused before any scoring runs.
+          Verification is also rate-limited to {{ rate_limit_max }} calls per
+          {{ rate_limit_window }} seconds per IP.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- honest limits -->
+<section class="how">
+  <h2>What it does not do</h2>
+  <div class="how-grid">
+    <div class="panel">
+      <div class="panel-t">Replace your password</div>
+      <div class="panel-d">This is a second factor layered over an existing login, not a
+        replacement for one. It raises the cost of using a stolen credential.</div>
+    </div>
+    <div class="panel">
+      <div class="panel-t">Work on one keystroke</div>
+      <div class="panel-d">The profile is built for one specific phrase. Typing rhythm on
+        arbitrary free text is a harder, noisier problem.</div>
+    </div>
+    <div class="panel">
+      <div class="panel-t">Ignore its own error rate</div>
+      <div class="panel-d">Tightening the threshold locks out more impostors and more genuine
+        users. That trade-off is visible on the admin analytics page, not hidden.</div>
+    </div>
+  </div>
+</section>
+
+<footer class="foot">
+  <span>◈ Sentinel · behavioral biometrics</span>
+  <span><a href="/admin">Admin</a> · keystroke dynamics IDS</span>
+</footer>
+
+</body>
+</html>

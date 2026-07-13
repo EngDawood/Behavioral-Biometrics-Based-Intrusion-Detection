@@ -68,3 +68,20 @@ CREATE TABLE IF NOT EXISTS sessions (
     expires_at TEXT    NOT NULL,
     FOREIGN KEY (admin_id) REFERENCES admins (id) ON DELETE CASCADE
 );
+
+-- 7. Audit trail of admin actions. Two jobs: it records who unlocked or deleted
+--    an account, and it persists intrusion-alert acknowledgements. Intrusions
+--    themselves stay derived from `attempts` -- they are not stored -- so an ack
+--    refers to one by (target, detail) = (username, triggering attempt time).
+CREATE TABLE IF NOT EXISTS admin_actions (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    admin_id   INTEGER,                     -- NULL if that admin was later removed
+    action     TEXT    NOT NULL,            -- 'unlock' | 'delete' | 'ack_intrusion'
+    target     TEXT    NOT NULL,            -- username the action applies to
+    detail     TEXT,                        -- ack: ISO time of the triggering attempt
+    created_at TEXT    NOT NULL,
+    FOREIGN KEY (admin_id) REFERENCES admins (id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_admin_actions_ack
+    ON admin_actions (action, target, detail);

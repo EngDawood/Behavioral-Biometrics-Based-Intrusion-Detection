@@ -12,16 +12,7 @@
 <body>
 
 <div class="shell">
-  <aside class="side">
-    <a class="brand" href="/admin/dashboard">
-      <span class="mark">◈</span><span class="brand-name">Sentinel</span>
-    </a>
-    <a class="navitem" href="/admin/dashboard"><span class="ic">▤</span>Overview</a>
-    <a class="navitem active" href="#"><span class="ic">◇</span>Users</a>
-    <a class="navitem" href="/admin/dashboard#events"><span class="ic">≋</span>Auth events</a>
-    <a class="navitem" href="/admin/policy"><span class="ic">⛨</span>Policy</a>
-    <a class="navitem" href="/"><span class="ic">◈</span>Live demo</a>
-  </aside>
+  {% set nav = 'users' %}{% include "_sidebar.html" %}
 
   <main class="main">
     <div class="main-head">

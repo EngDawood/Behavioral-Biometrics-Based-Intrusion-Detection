@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Auth events — Sentinel</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='sentinel.css') }}">
+</head>
+<body>
+
+<div class="shell">
+  {% set nav = 'events' %}{% include "_sidebar.html" %}
+
+  <main class="main">
+    <div class="main-head">
+      <div>
+        <h2>Auth events</h2>
+        <div class="sub">Every verification attempt the server scored, newest first.</div>
+      </div>
+      <span class="chip">{{ total }} MATCHING</span>
+    </div>
+
+    <form class="filterbar" method="get" action="/admin/events">
+      <input class="input" type="search" name="q" value="{{ q }}" placeholder="Search username…"
+             autocomplete="off" spellcheck="false">
+      <div class="tabs">
+        {% for key, label in [('all', 'All'), ('accept', 'Accepted'),
+                              ('suspicious', 'Suspicious'), ('reject', 'Rejected')] %}
+          <a class="tab {% if band == key %}on{% endif %} {{ key }}"
+             href="/admin/events?band={{ key }}{% if q %}&q={{ q|urlencode }}{% endif %}">
+            {{ label }} <span class="tab-n">{{ counts[key] }}</span>
+          </a>
+        {% endfor %}
+      </div>
+      <button class="btn btn-ghost btn-sm" type="submit">Search</button>
+      {% if q or band != 'all' %}
+        <a class="btn btn-ghost btn-sm" href="/admin/events">Clear</a>
+      {% endif %}
+    </form>
+
+    <div class="box">
+      <div class="box-head">
+        <span class="t">Verification log</span>
+        <span class="n">page {{ page }} of {{ pages }}</span>
+      </div>
+
+      {% if attempts %}
+      <table>
+        <thead>
+          <tr>
+            <th>#</th><th>USER</th><th>DISTANCE</th><th>THRESHOLD</th>
+            <th>MARGIN</th><th>DECISION</th><th>TIME (UTC)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for a in attempts %}
+          <tr>
+            <td class="mono">{{ a.id }}</td>
+            <td><a href="/admin/user/{{ a.username }}">{{ a.username }}</a></td>
+            <td class="mono">{{ "%.2f"|format(a.score) if a.score is not none else "—" }}</td>
+            <td class="mono">{{ "%.2f"|format(a.threshold) if a.threshold is not none else "—" }}</td>
+            <td class="mono {{ a.band }}">
+              {% if a.score is not none and a.threshold %}
+                ×{{ "%.2f"|format(a.score / a.threshold) }}
+              {% else %}—{% endif %}
+            </td>
+            <td><span class="pill {{ a.band }}">{{ a.band|upper }}</span></td>
+            <td class="time">{{ a.created_at[:19].replace("T", " ") }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+        <div class="empty">
+          {% if q or band != 'all' %}No events match this filter.
+            <a href="/admin/events">Clear it →</a>
+          {% else %}No attempts logged yet. <a href="/">Run the demo →</a>{% endif %}
+        </div>
+      {% endif %}
+    </div>
+
+    {% if pages > 1 %}
+    {% set qs = 'q=' ~ q|urlencode ~ '&band=' ~ band %}
+    <div class="pager">
+      {% if page > 1 %}
+        <a class="btn btn-ghost btn-xs" href="/admin/events?{{ qs }}&page={{ page - 1 }}">← Prev</a>
+      {% endif %}
+      <span class="mono-label">PAGE {{ page }} / {{ pages }}</span>
+      {% if page < pages %}
+        <a class="btn btn-ghost btn-xs" href="/admin/events?{{ qs }}&page={{ page + 1 }}">Next →</a>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    <div class="note">
+      <span class="accent">◈</span>
+      <div>Margin is the distance divided by that user's accept threshold. At or below
+        <code>×1.00</code> the attempt is accepted; up to
+        <code>×{{ "%.2f"|format(suspicious_margin) }}</code> it is flagged suspicious; beyond that
+        it is rejected.</div>
+    </div>
+  </main>
+</div>
+
+</body>
+</html>

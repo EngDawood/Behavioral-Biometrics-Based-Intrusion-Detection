@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Alerts — Sentinel</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='sentinel.css') }}">
+</head>
+<body>
+
+<div class="shell">
+  {% set nav = 'alerts' %}{% include "_sidebar.html" %}
+
+  <main class="main">
+    <div class="main-head">
+      <div>
+        <h2>Intrusion alerts</h2>
+        <div class="sub">Raised when a user hits {{ fail_lock_streak }} consecutive non-accepted
+          attempts. The account freezes for {{ lock_cooldown_min }} minutes.</div>
+      </div>
+      <span class="chip {% if n_open %}chip-bad{% else %}chip-ok{% endif %}">
+        {{ n_open }} OPEN
+      </span>
+    </div>
+
+    <div class="tabs tabs-wide">
+      {% for key, label, count in [('open', 'Open', n_open),
+                                   ('acked', 'Acknowledged', n_acked),
+                                   ('all', 'All', n_all)] %}
+        <a class="tab {% if show == key %}on{% endif %}" href="/admin/alerts?show={{ key }}">
+          {{ label }} <span class="tab-n">{{ count }}</span>
+        </a>
+      {% endfor %}
+    </div>
+
+    <div class="cols">
+      <div>
+        <div class="box">
+          <div class="box-head">
+            <span class="t">
+              {% if show == 'open' %}Open alerts
+              {% elif show == 'acked' %}Acknowledged alerts
+              {% else %}All alerts{% endif %}
+            </span>
+            <span class="n">page {{ page }} of {{ pages }}</span>
+          </div>
+
+          {% if events %}
+            {% for e in events %}
+            <div class="event alert-row {% if e.acked %}muted{% endif %}"
+                 data-user="{{ e.username }}" data-time="{{ e.time }}">
+              <span class="dot-led {% if e.acked %}suspicious{% else %}reject{% endif %}"></span>
+              <div class="who">
+                <div class="n"><a href="/admin/user/{{ e.username }}">{{ e.username }}</a></div>
+                <div class="w">
+                  {{ fail_lock_streak }} consecutive failures ·
+                  {% if e.locked %}locked, ~{{ (e.remaining // 60) + 1 }} min left
+                  {% else %}lock expired{% endif %}
+                  · {{ e.time[:19].replace("T", " ") }} UTC
+                </div>
+              </div>
+              <div class="alert-actions">
+                {% if e.acked %}
+                  <span class="chip chip-ok">✓ ACKED</span>
+                {% else %}
+                  <span class="chip chip-bad">● INTRUSION</span>
+                  <button class="btn btn-ghost btn-xs ack-btn">Acknowledge</button>
+                {% endif %}
+                {% if e.locked %}
+                  <button class="btn btn-warn btn-xs unlock-btn">Unlock</button>
+                {% endif %}
+              </div>
+            </div>
+            {% endfor %}
+          {% else %}
+            <div class="empty">
+              {% if show == 'open' %}No open alerts. Nothing needs your attention.
+              {% elif show == 'acked' %}Nothing acknowledged yet.
+              {% else %}No intrusions detected.{% endif %}
+            </div>
+          {% endif %}
+        </div>
+
+        {% if pages > 1 %}
+        <div class="pager">
+          {% if page > 1 %}
+            <a class="btn btn-ghost btn-xs" href="/admin/alerts?show={{ show }}&page={{ page - 1 }}">← Prev</a>
+          {% endif %}
+          <span class="mono-label">PAGE {{ page }} / {{ pages }}</span>
+          {% if page < pages %}
+            <a class="btn btn-ghost btn-xs" href="/admin/alerts?show={{ show }}&page={{ page + 1 }}">Next →</a>
+          {% endif %}
+        </div>
+        {% endif %}
+      </div>
+
+      <div class="box">
+        <div class="box-head">
+          <span class="t">Admin audit trail</span>
+          <span class="n">latest {{ audit|length }}</span>
+        </div>
+        {% if audit %}
+          {% for a in audit %}
+          <div class="event">
+            <span class="dot-led {% if a.action == 'delete' %}reject
+                                 {% elif a.action == 'unlock' %}suspicious
+                                 {% else %}accept{% endif %}"></span>
+            <div class="who">
+              <div class="n">{{ a.admin or "unknown admin" }}</div>
+              <div class="w">
+                {% if a.action == 'ack_intrusion' %}acknowledged an alert for
+                {% elif a.action == 'unlock' %}unlocked
+                {% else %}deleted{% endif %}
+                <strong>{{ a.target }}</strong>
+              </div>
+            </div>
+            <div class="right">
+              <div class="t">{{ a.created_at[11:19] }}</div>
+            </div>
+          </div>
+          {% endfor %}
+        {% else %}
+          <div class="empty">No admin actions recorded.</div>
+        {% endif %}
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+  // Both controls act on the row's user, then reload so the derived lock and
+  // ack state are recomputed server-side rather than guessed in the browser.
+  async function post(url, body) {
+    const r = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: body ? JSON.stringify(body) : null,
+    });
+    if (r.ok) location.reload();
+    else alert("Action failed.");
+  }
+
+  document.querySelectorAll(".alert-row").forEach(row => {
+    const user = row.dataset.user, time = row.dataset.time;
+
+    row.querySelector(".ack-btn")?.addEventListener("click", () =>
+      post("/api/admin/alert/ack", { username: user, time: time }));
+
+    row.querySelector(".unlock-btn")?.addEventListener("click", () => {
+      if (!confirm(`Unlock ${user}? This clears their attempt history.`)) return;
+      post(`/api/admin/user/${encodeURIComponent(user)}/unlock`);
+    });
+  });
+</script>
+
+</body>
+</html>
