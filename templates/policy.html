@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Policy — Sentinel</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='sentinel.css') }}">
+</head>
+<body>
+
+<div class="shell">
+  <aside class="side">
+    <a class="brand" href="/admin/dashboard">
+      <span class="mark">◈</span><span class="brand-name">Sentinel</span>
+    </a>
+    <a class="navitem" href="/admin/dashboard"><span class="ic">▤</span>Overview</a>
+    <a class="navitem" href="/admin/dashboard#users"><span class="ic">◇</span>Users</a>
+    <a class="navitem" href="/admin/dashboard#events"><span class="ic">≋</span>Auth events</a>
+    <a class="navitem active" href="/admin/policy"><span class="ic">⛨</span>Policy</a>
+    <a class="navitem" href="/"><span class="ic">◈</span>Live demo</a>
+  </aside>
+
+  <main class="main">
+    <div class="main-head">
+      <div>
+        <h2>Authentication policy</h2>
+        <div class="sub">How strictly Sentinel enrolls and verifies keystroke rhythm across the org.</div>
+      </div>
+      <span class="chip">READ-ONLY</span>
+    </div>
+
+    <div class="box policy">
+      <div class="box-head">
+        <span class="t">Live configuration</span>
+        <span class="n">phrase · {{ phrase }}</span>
+      </div>
+
+      <div class="box-body">
+        <!-- ENROLLMENT -->
+        <div class="policy-group">
+          <div class="gt">ENROLLMENT</div>
+
+          <div class="setting">
+            <div>
+              <div class="st">Samples required</div>
+              <div class="sd">More samples build a tighter profile but slow onboarding. The demo asks
+                for this many clean repetitions of the phrase before it builds a profile.</div>
+            </div>
+            <div class="control">
+              <div class="track">
+                <div class="fill" style="width:{{ samples_pct }}%"></div>
+                <div class="knob" style="left:{{ samples_pct }}%"></div>
+              </div>
+              <span class="val">{{ required_samples }}</span>
+            </div>
+          </div>
+
+          <div class="setting">
+            <div>
+              <div class="st">Threshold calibration (k)</div>
+              <div class="sd">The accept boundary sits at <em>mean + k · σ</em> of the user's
+                leave-one-out enrollment scores. Lower k is stricter.</div>
+            </div>
+            <div class="control">
+              <div class="track">
+                <div class="fill" style="width:{{ k_pct }}%"></div>
+                <div class="knob" style="left:{{ k_pct }}%"></div>
+              </div>
+              <span class="val">{{ "%.1f"|format(threshold_k) }}σ</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- MATCHING -->
+        <div class="policy-group">
+          <div class="gt">MATCHING</div>
+
+          <div class="setting">
+            <div>
+              <div class="st">Suspicious band</div>
+              <div class="sd">A distance just past the threshold — up to this multiple of it — is
+                flagged <span class="warn">suspicious</span> rather than rejected outright.</div>
+            </div>
+            <div class="control">
+              <div class="track">
+                <div class="fill" style="width:{{ margin_pct }}%"></div>
+                <div class="knob" style="left:{{ margin_pct }}%"></div>
+              </div>
+              <span class="val">×{{ "%.2f"|format(suspicious_margin) }}</span>
+            </div>
+          </div>
+
+          <div class="setting">
+            <div>
+              <div class="st">Lock account after failures</div>
+              <div class="sd">Consecutive non-accepted attempts before the account is treated as an
+                intrusion and frozen.</div>
+            </div>
+            <div class="lockchips">
+              {% for n in range(1, 6) %}
+                <div class="c {% if n == fail_lock_streak %}on{% endif %}">{{ n }}</div>
+              {% endfor %}
+            </div>
+          </div>
+
+          <div class="setting">
+            <div>
+              <div class="st">Lock cooldown</div>
+              <div class="sd">How long a locked account stays frozen, measured from the failure that
+                triggered the lock. An admin can clear it early from the user page.</div>
+            </div>
+            <div class="control">
+              <span class="val" style="width:auto">{{ lock_cooldown_min }} min</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- ENFORCEMENT -->
+        <div class="policy-group">
+          <div class="gt">ENFORCEMENT</div>
+
+          {% for t in toggles %}
+          <div class="setting">
+            <div>
+              <div class="st">{{ t.title }}</div>
+              <div class="sd">{{ t.desc }}</div>
+            </div>
+            <div class="control" style="width:auto;justify-content:flex-end">
+              <span class="chip {% if t.on %}chip-ok{% endif %}">{{ "● ON" if t.on else "OFF" }}</span>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+
+        <div class="note">
+          <span class="accent">◈</span>
+          <div>These values are the running configuration, read straight from the constants at the
+            top of <code>app.py</code> and <code>keystroke_model.py</code>. Editing them here is
+            deliberately not wired up — change the constants and restart, so the policy the
+            dashboard shows is always the policy the server enforces.</div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+</body>
+</html>

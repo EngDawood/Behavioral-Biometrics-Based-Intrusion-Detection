@@ -3,102 +3,249 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Admin — Keystroke Demo</title>
-<style>
-  :root { --bg:#0f1420; --card:#1a2130; --line:#2b3446; --ink:#e8edf5;
-          --muted:#93a0b5; --accent:#4a9eff; --ok:#2ecc71; --bad:#e74c3c; }
-  * { box-sizing:border-box; }
-  body { margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
-         background:var(--bg); color:var(--ink); }
-  .wrap { max-width:900px; margin:0 auto; padding:32px 20px 64px; }
-  h1 { font-size:1.4rem; margin:0 0 20px; }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:12px;
-          padding:22px; }
-  label { display:block; font-size:.85rem; color:var(--muted); margin:0 0 6px; }
-  input { width:100%; padding:11px 13px; font-size:1rem; border-radius:8px;
-          border:1px solid var(--line); background:#10151f; color:var(--ink); margin-bottom:14px; }
-  input:focus { outline:none; border-color:var(--accent); }
-  button { padding:10px 18px; border:none; border-radius:8px; background:var(--accent);
-           color:#08111f; font-weight:600; cursor:pointer; }
-  button.ghost { background:transparent; color:var(--muted); border:1px solid var(--line); }
-  .msg { color:var(--bad); font-size:.9rem; min-height:1.1em; margin-top:8px; }
-  .bar { display:flex; justify-content:space-between; align-items:center; margin-bottom:18px; }
-  .bar .who { color:var(--muted); font-size:.9rem; }
-  table { width:100%; border-collapse:collapse; font-size:.9rem; }
-  th, td { text-align:left; padding:9px 10px; border-bottom:1px solid var(--line); }
-  th { color:var(--muted); font-weight:600; }
-  td.mono { font-family:ui-monospace,Menlo,monospace; }
-  .pill { padding:2px 9px; border-radius:20px; font-size:.78rem; font-weight:600; }
-  .pill.ok { background:rgba(46,204,113,.15); color:var(--ok); }
-  .pill.no { background:rgba(231,76,60,.15); color:var(--bad); }
-  .empty { color:var(--muted); padding:24px 0; text-align:center; }
-  a { color:var(--muted); font-size:.85rem; }
-</style>
+<title>{% if logged_in %}Overview{% else %}Sign in{% endif %} — Sentinel</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='sentinel.css') }}">
 </head>
 <body>
-<div class="wrap">
+
 {% if not logged_in %}
-  <h1>Admin login</h1>
-  <div class="card" style="max-width:380px;">
-    <label>Username</label>
-    <input id="u" value="admin" autocomplete="off">
-    <label>Password</label>
-    <input id="p" type="password" autocomplete="off">
-    <button onclick="login()">Log in</button>
-    <div class="msg" id="msg"></div>
+<!-- ===================================================== LOGIN -->
+<div class="login-wrap">
+  <div class="gridbg" aria-hidden="true"></div>
+  <div class="card login-card">
+    <div class="card-head">
+      <div class="brand">
+        <span class="mark">◈</span>
+        <div>
+          <div class="brand-name">Sentinel</div>
+          <div class="mono-label">SECURITY&nbsp;CONSOLE</div>
+        </div>
+      </div>
+      <span class="chip">ADMIN</span>
+    </div>
+
+    <div class="step-title">Sign in</div>
+    <div class="step-sub">Monitoring, intrusion alerts and account controls for your workspace.</div>
+
+    <label class="field-label" for="u">Username</label>
+    <input id="u" class="input" value="admin" autocomplete="off" spellcheck="false">
+
+    <label class="field-label" for="p">Password</label>
+    <input id="p" class="input" type="password" autocomplete="current-password">
+
+    <div class="err" id="msg" hidden></div>
+    <div style="margin-top:20px"></div>
+    <button class="btn btn-accent btn-block" id="login-btn">Log in</button>
+
+    <div class="card-foot">
+      <span class="mono-label">session · 8h · httponly cookie</span>
+      <a class="btn btn-ghost btn-xs" href="/">← Demo</a>
+    </div>
   </div>
-  <p style="margin-top:16px;"><a href="/">← Back to demo</a></p>
-  <script>
-    async function login() {
-      const resp = await fetch("/api/admin/login", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: document.getElementById("u").value,
-                               password: document.getElementById("p").value }),
-      });
-      if (resp.ok) location.href = "/admin/dashboard";
-      else document.getElementById("msg").textContent = "Invalid credentials.";
-    }
-    document.getElementById("p").addEventListener("keydown",
-      e => { if (e.key === "Enter") login(); });
-  </script>
-{% else %}
-  <div class="bar">
-    <h1 style="margin:0;">Verification attempts</h1>
-    <span class="who">{{ admin }} · <a href="#" onclick="logout();return false;">log out</a></span>
-  </div>
-  <div class="card">
-    {% if attempts %}
-    <table>
-      <thead><tr>
-        <th>#</th><th>Username</th><th>Score</th><th>Threshold</th>
-        <th>Decision</th><th>Time (UTC)</th>
-      </tr></thead>
-      <tbody>
-      {% for a in attempts %}
-        <tr>
-          <td class="mono">{{ a["id"] }}</td>
-          <td>{{ a["username"] }}</td>
-          <td class="mono">{{ "%.2f"|format(a["score"]) if a["score"] is not none else "—" }}</td>
-          <td class="mono">{{ "%.2f"|format(a["threshold"]) if a["threshold"] is not none else "—" }}</td>
-          <td>{% if a["accepted"] %}<span class="pill ok">accepted</span>
-              {% else %}<span class="pill no">rejected</span>{% endif %}</td>
-          <td class="mono">{{ a["created_at"][:19].replace("T"," ") }}</td>
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-    {% else %}
-      <div class="empty">No attempts logged yet. Try verifying on the demo page.</div>
-    {% endif %}
-  </div>
-  <p style="margin-top:16px;"><a href="/">← Back to demo</a></p>
-  <script>
-    async function logout() {
-      await fetch("/api/admin/logout", { method: "POST" });
-      location.href = "/admin";
-    }
-  </script>
-{% endif %}
 </div>
+
+<script>
+  const msg = document.getElementById("msg");
+  async function login() {
+    msg.hidden = true;
+    const r = await fetch("/api/admin/login", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: document.getElementById("u").value,
+                             password: document.getElementById("p").value }),
+    });
+    if (r.ok) { location.href = "/admin/dashboard"; return; }
+    msg.textContent = "⚠ Invalid credentials.";
+    msg.hidden = false;
+  }
+  document.getElementById("login-btn").addEventListener("click", login);
+  document.getElementById("p").addEventListener("keydown",
+    e => { if (e.key === "Enter") login(); });
+</script>
+
+{% else %}
+<!-- ===================================================== DASHBOARD -->
+<div class="shell">
+  <aside class="side">
+    <a class="brand" href="/admin/dashboard">
+      <span class="mark">◈</span><span class="brand-name">Sentinel</span>
+    </a>
+    <a class="navitem active" href="/admin/dashboard"><span class="ic">▤</span>Overview</a>
+    <a class="navitem" href="#users"><span class="ic">◇</span>Users</a>
+    <a class="navitem" href="#events"><span class="ic">≋</span>Auth events</a>
+    <a class="navitem" href="/admin/policy"><span class="ic">⛨</span>Policy</a>
+    <a class="navitem" href="/"><span class="ic">◈</span>Live demo</a>
+    <div class="side-foot">
+      <div class="avatar">{{ admin[:2]|upper }}</div>
+      <div>
+        <div class="who-name">{{ admin }}</div>
+        <div class="who-role">Security admin</div>
+      </div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="main-head">
+      <div>
+        <h2>Overview</h2>
+        <div class="sub">Behavioral auth across your workspace · scaled-Manhattan detector</div>
+      </div>
+      <div class="head-actions">
+        <button class="btn btn-ghost btn-sm" onclick="location.reload()">Refresh</button>
+        <button class="btn btn-ghost btn-sm" id="logout-btn">Log out</button>
+      </div>
+    </div>
+
+    <!-- stats -->
+    <div class="statgrid">
+      <div class="statcard">
+        <div class="l">ENROLLED USERS</div>
+        <div class="n">{{ stats.users }}</div>
+        <div class="d">profiles on record</div>
+      </div>
+      <div class="statcard">
+        <div class="l">AUTH EVENTS</div>
+        <div class="n">{{ stats.attempts }}</div>
+        <div class="d">verification attempts</div>
+      </div>
+      <div class="statcard">
+        <div class="l">ACCEPT RATE</div>
+        <div class="n">{{ stats.accept_rate }}%</div>
+        <div class="d">accepted / all attempts</div>
+      </div>
+      <div class="statcard {% if stats.intrusions %}alarm{% endif %}">
+        <div class="l">INTRUSIONS</div>
+        <div class="n">{{ stats.intrusions }}</div>
+        <div class="d">{{ fail_lock_streak }}+ consecutive failures</div>
+      </div>
+      <div class="statcard {% if stats.locked %}alarm{% endif %}">
+        <div class="l">LOCKED NOW</div>
+        <div class="n">{{ stats.locked }}</div>
+        <div class="d">{{ lock_cooldown_min }} min cooldown</div>
+      </div>
+    </div>
+
+    {% if locked %}
+    <div class="box">
+      <div class="box-head">
+        <span class="t">Currently locked accounts</span>
+        <span class="n">intrusion policy</span>
+      </div>
+      <div class="box-body">
+        {% for l in locked %}
+          <a class="lockchip" href="/admin/user/{{ l.username }}">
+            🔒 {{ l.username }} · ~{{ (l.remaining // 60) + 1 }} min left</a>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    <div class="cols">
+      <!-- users -->
+      <div>
+        <div class="box" id="users">
+          <div class="box-head">
+            <span class="t">Enrolled users</span>
+            <span class="n">{{ users|length }} of {{ stats.users }} shown</span>
+          </div>
+          {% if users %}
+          <table>
+            <thead>
+              <tr><th>USER</th><th>STATUS</th><th>SAMPLES</th><th>THRESHOLD</th><th>LAST SEEN</th></tr>
+            </thead>
+            <tbody>
+              {% for u in users %}
+              <tr>
+                <td>
+                  <a class="userlink" href="/admin/user/{{ u.username }}">
+                    <span class="av {% if u.locked %}locked{% endif %}">{{ u.username[:2]|upper }}</span>
+                    <span>{{ u.username }}</span>
+                  </a>
+                </td>
+                <td>
+                  {% if u.locked %}<span class="pill reject">LOCKED</span>
+                  {% elif u.n_samples %}<span class="pill accept">ENROLLED</span>
+                  {% else %}<span class="pill suspicious">NO PROFILE</span>{% endif %}
+                </td>
+                <td class="mono">{{ u.n_samples or "—" }}</td>
+                <td class="mono">{{ "%.2f"|format(u.threshold) if u.threshold is not none else "—" }}</td>
+                <td class="time">{{ u.last_seen[:19].replace("T", " ") if u.last_seen else "never" }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          {% else %}
+          <div class="empty">No users enrolled yet. <a href="/">Run the demo →</a></div>
+          {% endif %}
+        </div>
+
+        <!-- attempts -->
+        <div class="box" id="events">
+          <div class="box-head">
+            <span class="t">Recent verification attempts</span>
+            <span class="n">latest {{ attempts|length }}</span>
+          </div>
+          {% if attempts %}
+          <table>
+            <thead>
+              <tr><th>#</th><th>USER</th><th>DISTANCE</th><th>THRESHOLD</th><th>DECISION</th><th>TIME (UTC)</th></tr>
+            </thead>
+            <tbody>
+              {% for a in attempts %}
+              <tr>
+                <td class="mono">{{ a.id }}</td>
+                <td><a href="/admin/user/{{ a.username }}">{{ a.username }}</a></td>
+                <td class="mono">{{ "%.2f"|format(a.score) if a.score is not none else "—" }}</td>
+                <td class="mono">{{ "%.2f"|format(a.threshold) if a.threshold is not none else "—" }}</td>
+                <td><span class="pill {{ a.band }}">{{ a.band|upper }}</span></td>
+                <td class="time">{{ a.created_at[:19].replace("T", " ") }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          {% else %}
+          <div class="empty">No attempts logged yet.</div>
+          {% endif %}
+        </div>
+      </div>
+
+      <!-- intrusion feed -->
+      <div class="box">
+        <div class="box-head">
+          <span class="t">Intrusion alerts</span>
+          <span class="n">≥ {{ fail_lock_streak }} fails</span>
+        </div>
+        {% if alerts %}
+          {% for a in alerts %}
+          <div class="event">
+            <span class="dot-led reject"></span>
+            <div class="who">
+              <div class="n"><a href="/admin/user/{{ a.username }}">{{ a.username }}</a></div>
+              <div class="w">{{ fail_lock_streak }} consecutive failures · account locked</div>
+            </div>
+            <div class="right">
+              <div class="v bad">INTRUSION</div>
+              <div class="t">{{ a.time[11:19] }}</div>
+            </div>
+          </div>
+          {% endfor %}
+        {% else %}
+          <div class="empty">No intrusions detected.</div>
+        {% endif %}
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+  document.getElementById("logout-btn").addEventListener("click", async () => {
+    await fetch("/api/admin/logout", { method: "POST" });
+    location.href = "/admin";
+  });
+</script>
+{% endif %}
+
 </body>
 </html>

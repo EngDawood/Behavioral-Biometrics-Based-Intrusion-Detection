@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ username }} — Sentinel</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='sentinel.css') }}">
+</head>
+<body>
+
+<div class="shell">
+  <aside class="side">
+    <a class="brand" href="/admin/dashboard">
+      <span class="mark">◈</span><span class="brand-name">Sentinel</span>
+    </a>
+    <a class="navitem" href="/admin/dashboard"><span class="ic">▤</span>Overview</a>
+    <a class="navitem active" href="#"><span class="ic">◇</span>Users</a>
+    <a class="navitem" href="/admin/dashboard#events"><span class="ic">≋</span>Auth events</a>
+    <a class="navitem" href="/admin/policy"><span class="ic">⛨</span>Policy</a>
+    <a class="navitem" href="/"><span class="ic">◈</span>Live demo</a>
+  </aside>
+
+  <main class="main">
+    <div class="main-head">
+      <div>
+        <h2>{{ username }}</h2>
+        <div class="sub"><a href="/admin/dashboard">← Back to overview</a></div>
+      </div>
+      <span class="chip {% if is_locked %}chip-bad{% elif profile %}chip-ok{% else %}chip-warn{% endif %}">
+        {% if is_locked %}✕ LOCKED{% elif profile %}✓ ENROLLED{% else %}! NO PROFILE{% endif %}
+      </span>
+    </div>
+
+    <div class="box">
+      <div class="box-head">
+        <span class="t">Profile</span>
+        <span class="n">scaled-manhattan</span>
+      </div>
+      <div class="box-body">
+        <div class="kvrow">
+          <div class="kv">
+            <div class="k">STATUS</div>
+            <div class="v {% if is_locked %}bad{% else %}ok{% endif %}">
+              {% if is_locked %}🔒 Locked · ~{{ (remaining // 60) + 1 }} min{% else %}Active{% endif %}
+            </div>
+          </div>
+          {% if profile %}
+          <div class="kv">
+            <div class="k">ENROLLMENT SAMPLES</div>
+            <div class="v">{{ profile.n_samples }}</div>
+          </div>
+          <div class="kv">
+            <div class="k">ACCEPT THRESHOLD</div>
+            <div class="v">{{ "%.2f"|format(profile.threshold) }}</div>
+          </div>
+          <div class="kv">
+            <div class="k">PROFILE UPDATED</div>
+            <div class="v">{{ profile.updated_at[:19].replace("T", " ") }}</div>
+          </div>
+          {% else %}
+          <div class="kv">
+            <div class="k">PROFILE</div>
+            <div class="v warn">None — unknown user</div>
+          </div>
+          {% endif %}
+        </div>
+        <div class="actions">
+          <button class="btn btn-warn btn-sm" onclick="act('unlock')">Unlock · clear attempts</button>
+          <button class="btn btn-bad btn-sm" onclick="act('delete')">Delete user</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="box">
+      <div class="box-head">
+        <span class="t">Attempt history</span>
+        <span class="n">latest {{ attempts|length }}</span>
+      </div>
+      {% if attempts %}
+      <table>
+        <thead>
+          <tr><th>#</th><th>DISTANCE</th><th>THRESHOLD</th><th>DECISION</th><th>TIME (UTC)</th></tr>
+        </thead>
+        <tbody>
+          {% for a in attempts %}
+          <tr>
+            <td class="mono">{{ a.id }}</td>
+            <td class="mono">{{ "%.2f"|format(a.score) if a.score is not none else "—" }}</td>
+            <td class="mono">{{ "%.2f"|format(a.threshold) if a.threshold is not none else "—" }}</td>
+            <td><span class="pill {{ a.band }}">{{ a.band|upper }}</span></td>
+            <td class="time">{{ a.created_at[:19].replace("T", " ") }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="empty">No attempts recorded.</div>
+      {% endif %}
+    </div>
+  </main>
+</div>
+
+<script>
+  async function act(kind) {
+    const verb = kind === "delete" ? "delete this user" : "clear this user's attempts";
+    if (!confirm("Are you sure you want to " + verb + "?")) return;
+    const r = await fetch(`/api/admin/user/{{ username }}/${kind}`, { method: "POST" });
+    if (r.ok) location.href = kind === "delete" ? "/admin/dashboard" : location.href;
+    else alert("Action failed.");
+  }
+</script>
+
+</body>
+</html>

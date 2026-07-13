@@ -1,26 +1,38 @@
-# Keystroke Dynamics — Live Demo (Flask)
+# Keystroke Dynamics — Intrusion Detection Service (Flask)
 
-Browser demo for the **Behavioral Biometrics-Based Intrusion Detection** project.
-A user enrolls a typing profile by typing a fixed phrase several times; on
-verification, the server decides whether a new typing sample matches the enrolled
-rhythm — accepting the genuine user and rejecting intruders who know the password
-but type differently.
+Browser-based **Behavioral Biometrics-Based Intrusion Detection** system. A user
+enrolls a typing profile by typing a fixed phrase several times; on each login the
+server decides whether the new typing rhythm matches — and, beyond a single
+decision, watches for *runs* of failed attempts and treats them as intrusions.
+
+## What it does
+
+- **Enroll → verify** — the browser captures keystroke timings (Hold / Down-Down /
+  Up-Down), the backend builds and stores a per-user profile, and scores each
+  login attempt with the Scaled Manhattan detector.
+- **Three-tier decision** — accept / suspicious / reject, based on how far the
+  score sits above the user's threshold.
+- **Intrusion detection + lockout** — a run of consecutive failed verifications
+  (default 3) is flagged as an intrusion and temporarily locks the account
+  (default 5 min). Locked logins are refused before scoring.
+- **Admin monitoring** — a dashboard with live statistics, an intrusion-alert
+  feed, currently-locked accounts, the recent attempt log, and a per-user
+  drill-down with unlock / delete controls.
+- **Rate limiting** — per-IP cap on verification requests.
+
+All intrusion and lock state is *derived from the `attempts` table* — no extra
+tables or columns — so the six-table ERD from Chapter 4 is unchanged.
 
 ## Scope
 
-This is the **live demo only**. It collects keystroke timings in the browser
-(millisecond precision) and stores them in SQLite. It is deliberately kept
-separate from the **offline CMU benchmark** (`train.py` / the evaluation
-notebook), which uses microsecond-precision hardware-clock data. The two are
-never mixed — but both score samples with the **same** `keystroke_model` module
-(Scaled Manhattan distance), so the demo and the benchmark tell one coherent
-story.
-
-Rigorous accuracy figures (EER, ROC, confusion matrix) come from the offline
-benchmark. This demo is a demonstration of the mechanism in real time, not a
-source of benchmark numbers: its threshold is calibrated from genuine samples
-only (no impostor data exists at enrollment), so it cannot hit the benchmark's
-EER-optimal operating point.
+This is the **live system**. It collects browser keystroke timings (millisecond
+precision) in SQLite and is kept separate from the **offline CMU benchmark**
+(`train.py` / the evaluation notebook), which uses microsecond hardware-clock data.
+Both score samples with the SAME `keystroke_model` module (Scaled Manhattan), so
+the two modes stay aligned while their methodologies stay separate. Rigorous
+accuracy figures (EER, ROC, DET, confusion matrix) come from the benchmark; the
+live system's threshold is calibrated from genuine samples only, so it cannot reach
+the benchmark's EER-optimal operating point.
 
 ## Run
 
@@ -42,34 +54,36 @@ python seed_demo.py
 Admin dashboard: <http://127.0.0.1:5000/admin> — default login `admin` / `admin123`
 (change `ADMIN_PASSWORD` in `app.py`).
 
-## How it works
-
-1. **Enroll** — the browser captures keydown/keyup timestamps as you type the
-   phrase, builds Hold / Down-Down / Up-Down features (the same feature families
-   as the CMU benchmark), and posts several samples. The backend stores the raw
-   samples, then calls `keystroke_model.enroll` to build and store a profile.
-2. **Verify** — the browser posts one sample. The backend loads the profile,
-   calls `keystroke_model.verify`, logs the attempt, and returns accept/reject.
-3. **Admin** — every attempt is logged and shown on the dashboard.
-
-The backend owns the decision; the browser never scores anything.
-
 ## Files
 
 | File | Role |
 |------|------|
-| `app.py` | Flask routes, SQLite access, admin auth |
+| `app.py` | Flask routes, decision + intrusion logic, SQLite access, admin auth |
 | `keystroke_model.py` | Shared matcher (enroll/verify + detectors) — identical to the benchmark's |
 | `schema.sql` | The six tables: users, admins, enrollment_samples, profiles, attempts, sessions |
 | `templates/index.html` | Enroll + verify UI with keystroke capture |
-| `templates/admin.html` | Admin login + attempts dashboard |
-| `seed_demo.py` | Optional: fill the DB with synthetic users + attempts for a demo |
+| `templates/admin.html` | Admin login + monitoring dashboard |
+| `templates/admin_user.html` | Per-user drill-down (history, unlock, delete) |
+| `seed_demo.py` | Optional: fill the DB with synthetic users + attempts |
 
-## Tuning
+## Tuning (top of `app.py`)
 
-- `REQUIRED_SAMPLES` (app.py) — enrollment repetitions. More samples give a more
-  reliable profile; 10 is a good balance.
-- `DEFAULT_THRESHOLD_K` (keystroke_model.py) — accept/reject boundary at
-  `mean + k · std` of the leave-one-out genuine scores. Lower `k` rejects more
-  intruders but risks locking out the real user; higher `k` is more permissive.
-  Default 1.5.
+| Setting | Meaning |
+|---------|---------|
+| `REQUIRED_SAMPLES` | Enrollment repetitions (default 10). |
+| `SUSPICIOUS_MARGIN` | Score band for "suspicious": `(threshold, threshold × margin]`. |
+| `FAIL_LOCK_STREAK` | Consecutive failures that trigger an intrusion + lock (default 3). |
+| `LOCK_COOLDOWN_MIN` | Lock duration in minutes (default 5). |
+| `RATE_LIMIT_MAX` / `RATE_LIMIT_WINDOW` | Per-IP verify cap and window. |
+| `DEFAULT_THRESHOLD_K` (in `keystroke_model.py`) | Accept boundary at `mean + k · std` of leave-one-out genuine scores. |
+
+## How the decision flows
+
+1. **Rate check** — too many verifies from one IP → `429`.
+2. **Lock check** — account in a failed-streak cooldown → `423`, refused before scoring.
+3. **Score** — the shared matcher returns a distance; the band (accept / suspicious /
+   reject) follows from the margin over the threshold.
+4. **Log + detect** — the attempt is written to `attempts`; if it completes a
+   failure streak, the response flags an intrusion and the account locks.
+
+The backend owns every decision; the browser only captures timings.

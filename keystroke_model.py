@@ -208,8 +208,10 @@ def verify(profile, sample, feature_order=None):
     Returns
     -------
     dict
-        {score, threshold, accepted} where `accepted` is True when the sample is
-        close enough to the enrolled profile to be treated as the genuine user.
+        {score, threshold, accepted, deviations} where `accepted` is True when the
+        sample is close enough to the enrolled profile to be treated as the genuine
+        user. `deviations` is the per-feature |x - mean| / MAD vector the score sums
+        over -- it says *which* timings drifted, not just by how much overall.
     """
     stored_order = profile.get("feature_order")
     if stored_order is not None and feature_order is not None:
@@ -224,6 +226,12 @@ def verify(profile, sample, feature_order=None):
             f"sample has {x.shape[0]} features, profile expects {mean.shape[0]}"
         )
 
-    score = float((np.abs(x - mean) / mad).sum())
+    deviations = np.abs(x - mean) / mad
+    score = float(deviations.sum())
     threshold = float(profile["threshold"])
-    return {"score": score, "threshold": threshold, "accepted": score <= threshold}
+    return {
+        "score": score,
+        "threshold": threshold,
+        "accepted": score <= threshold,
+        "deviations": deviations.tolist(),
+    }
