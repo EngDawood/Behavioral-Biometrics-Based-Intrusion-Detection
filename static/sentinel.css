@@ -908,7 +908,6 @@ td.mono.reject     { color: var(--bad); }
    ========================================================================== */
 .credits { display: flex; gap: 28px; align-items: center; }
 .credits-body { flex: 1; min-width: 0; }
-.credits .note { margin-top: 18px; }
 .uni-logo {
   flex: none;
   width: 128px; height: auto;
@@ -916,7 +915,7 @@ td.mono.reject     { color: var(--bad); }
   background: oklch(0.98 0.01 250);
   padding: 12px;
 }
-
+.credits .note { margin-top: 18px; }
 /* ==========================================================================
    Responsive
    ========================================================================== */
