@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My account — Sentinel</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='sentinel.css') }}">
+</head>
+<body>
+
+<div class="shell">
+  {% set nav = 'account' %}{% include "_sidebar.html" %}
+
+  <main class="main">
+    <div class="main-head">
+      <div>
+        <h2>My account</h2>
+        <div class="sub">Your own credentials — both factors — and the actions you've taken.</div>
+      </div>
+      <span class="chip {% if has_rhythm %}chip-ok{% else %}chip-warn{% endif %}">
+        {% if has_rhythm %}✓ 2 FACTORS{% else %}! PASSWORD ONLY{% endif %}
+      </span>
+    </div>
+
+    <div class="box policy">
+      <div class="box-head">
+        <span class="t">Identity</span>
+        <span class="n">security admin</span>
+      </div>
+      <div class="box-body">
+        <div class="kvrow">
+          <div class="kv">
+            <div class="k">USERNAME</div>
+            <div class="v">{{ account.username }}</div>
+          </div>
+          <div class="kv">
+            <div class="k">ACCOUNT CREATED</div>
+            <div class="v">{{ account.created_at[:19].replace("T", " ") }}</div>
+          </div>
+          <div class="kv">
+            <div class="k">RHYTHM FACTOR</div>
+            <div class="v {% if has_rhythm %}ok{% else %}warn{% endif %}">
+              {% if has_rhythm %}Enrolled{% else %}Not enrolled{% endif %}
+            </div>
+          </div>
+          <div class="kv">
+            <div class="k">ACTIVE SESSIONS</div>
+            <div class="v">{{ n_sessions }}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="box policy">
+      <div class="box-head">
+        <span class="t">Change password</span>
+        <span class="n">{{ phrase_min }}–{{ phrase_max }} chars · 1 number · 1 symbol</span>
+      </div>
+      <div class="box-body">
+        <div class="form">
+          <label class="field-label" for="old-pw">CURRENT PASSWORD</label>
+          <input id="old-pw" class="input" type="password" autocomplete="current-password">
+
+          <label class="field-label" for="new-pw">NEW PASSWORD</label>
+          <input id="new-pw" class="input" type="password" autocomplete="new-password">
+
+          <label class="field-label" for="new-pw2">CONFIRM NEW PASSWORD</label>
+          <input id="new-pw2" class="input" type="password" autocomplete="new-password">
+
+          <div class="err" id="pw-msg" hidden></div>
+          <div class="actions">
+            <button class="btn btn-accent btn-sm" id="pw-btn">Change password</button>
+          </div>
+        </div>
+
+        <div class="note">
+          <span class="accent">◈</span>
+          <div>Your rhythm profile was learned from the way you type <em>this</em> password, so
+            changing it clears that profile — the next login will ask you to type the new password
+            {{ admin_enroll_samples }} times to re-learn it. Any other console signed in on the old
+            password is signed out; this one stays.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="box policy">
+      <div class="box-head">
+        <span class="t">Keystroke rhythm</span>
+        <span class="n">{{ "enrolled" if has_rhythm else "awaiting enrollment" }}</span>
+      </div>
+      <div class="box-body">
+        {% if has_rhythm %}
+        <div class="form">
+          <div class="hint">If your typing has drifted far enough that login keeps failing, drop the
+            profile and enroll it again. Confirm with your password — the same guard that protects
+            the enrollment this re-opens.</div>
+
+          <label class="field-label" for="reset-pw">PASSWORD</label>
+          <input id="reset-pw" class="input" type="password" autocomplete="current-password">
+
+          <div class="err" id="rr-msg" hidden></div>
+          <div class="actions">
+            <button class="btn btn-warn btn-sm" id="rr-btn">Reset rhythm profile</button>
+          </div>
+        </div>
+        <div class="note">
+          <span class="accent">◈</span>
+          <div>This ends every session, including this one, and returns you to the login screen —
+            that is where the new samples are collected.</div>
+        </div>
+        {% else %}
+        <div class="empty">No rhythm profile yet. The next login will collect
+          {{ admin_enroll_samples }} samples of your password and enroll one.</div>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="box">
+      <div class="box-head">
+        <span class="t">My recent actions</span>
+        <span class="n">latest {{ actions|length }}</span>
+      </div>
+      {% if actions %}
+      {% set LABELS = {
+          'unlock':          'Unlocked account',
+          'delete':          'Deleted user',
+          'reset':           'Forced re-enrollment',
+          'ack_intrusion':   'Acknowledged intrusion',
+          'enroll_rhythm':   'Enrolled own rhythm',
+          'change_password': 'Changed own password',
+          'reset_rhythm':    'Reset own rhythm',
+      } %}
+      <table>
+        <thead>
+          <tr><th>ACTION</th><th>TARGET</th><th>DETAIL</th><th>TIME (UTC)</th></tr>
+        </thead>
+        <tbody>
+          {% for a in actions %}
+          <tr>
+            <td>{{ LABELS.get(a.action, a.action) }}</td>
+            <td class="mono">{{ a.target }}</td>
+            <td class="time">{{ a.detail[:19].replace("T", " ") if a.detail else "—" }}</td>
+            <td class="time">{{ a.created_at[:19].replace("T", " ") }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="empty">You haven't taken any recorded actions yet.</div>
+      {% endif %}
+    </div>
+  </main>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+function showMsg(id, text, good) {
+  const box = $(id);
+  box.textContent = text ? (good ? "✓ " : "⚠ ") + text : "";
+  box.className = good ? "err good" : "err";
+  box.hidden = !text;
+}
+
+$("pw-btn").addEventListener("click", async () => {
+  const oldPw = $("old-pw").value, newPw = $("new-pw").value;
+  if (newPw !== $("new-pw2").value) {
+    showMsg("pw-msg", "The two new passwords do not match.", false);
+    return;
+  }
+  const r = await fetch("/api/admin/password", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ old_password: oldPw, new_password: newPw }),
+  });
+  const out = await r.json();
+  if (!r.ok || !out.ok) {
+    showMsg("pw-msg", out.error || "Could not change the password.", false);
+    return;
+  }
+  showMsg("pw-msg", "Password changed. Your rhythm profile was cleared — the next login " +
+                    "will re-enroll it.", true);
+  ["old-pw", "new-pw", "new-pw2"].forEach(id => $(id).value = "");
+  setTimeout(() => location.reload(), 2500);
+});
+
+const rrBtn = $("rr-btn");
+if (rrBtn) rrBtn.addEventListener("click", async () => {
+  const r = await fetch("/api/admin/rhythm/reset", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password: $("reset-pw").value }),
+  });
+  const out = await r.json();
+  if (!r.ok || !out.ok) {
+    showMsg("rr-msg", out.error || "Could not reset the rhythm profile.", false);
+    return;
+  }
+  location.href = "/admin";
+});
+</script>
+
+</body>
+</html>

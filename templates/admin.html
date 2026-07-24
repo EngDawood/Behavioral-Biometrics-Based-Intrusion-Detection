@@ -27,42 +27,168 @@
       <span class="chip">ADMIN</span>
     </div>
 
-    <div class="step-title">Sign in</div>
-    <div class="step-sub">Monitoring, intrusion alerts and account controls for your workspace.</div>
+    <div class="step-title" id="login-title">Sign in</div>
+    <div class="step-sub" id="login-sub">Monitoring, intrusion alerts and account controls for
+      your workspace. Type your password and press Enter — your typing rhythm is part of the
+      login.</div>
 
     <label class="field-label" for="u">Username</label>
     <input id="u" class="input" value="admin" autocomplete="off" spellcheck="false">
 
     <label class="field-label" for="p">Password</label>
-    <input id="p" class="input" type="password" autocomplete="current-password">
+    <!-- new-password + no name stops the browser autofilling a saved password;
+         autofill fires no keystrokes, so it would also defeat the rhythm check. -->
+    <input id="p" class="input" type="password" autocomplete="new-password"
+           autocorrect="off" autocapitalize="off" spellcheck="false"
+           data-lpignore="true" data-1p-ignore data-form-type="other">
+
+    <div class="dots-wrap" id="rhythm-dots-wrap" hidden>
+      <div class="dots" id="rhythm-dots"></div>
+      <div class="dots-text" id="rhythm-dots-text"></div>
+    </div>
 
     <div class="err" id="msg" hidden></div>
     <div style="margin-top:20px"></div>
     <button class="btn btn-accent btn-block" id="login-btn">Log in</button>
 
     <div class="card-foot">
-      <span class="mono-label">session · 8h · httponly cookie</span>
+      <span class="mono-label">password + keystroke rhythm · 8h session</span>
       <a class="btn btn-ghost btn-xs" href="/">← Demo</a>
     </div>
   </div>
 </div>
 
 <script>
-  const msg = document.getElementById("msg");
-  async function login() {
-    msg.hidden = true;
-    const r = await fetch("/api/admin/login", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: document.getElementById("u").value,
-                             password: document.getElementById("p").value }),
-    });
-    if (r.ok) { location.href = "/admin/dashboard"; return; }
-    msg.textContent = "⚠ Invalid credentials.";
-    msg.hidden = false;
+const ENROLL_N = {{ admin_enroll_samples|default(6) }};
+const $ = (id) => document.getElementById(id);
+
+// Keys that are not part of the typed password and must be ignored.
+const IGNORE = new Set(["ShiftLeft","ShiftRight","AltLeft","AltRight",
+  "ControlLeft","ControlRight","MetaLeft","MetaRight","CapsLock","Tab"]);
+
+function featureOrder(nKeys) {
+  const names = [];
+  for (let i = 0; i < nKeys; i++) {
+    names.push("H_" + i);
+    if (i < nKeys - 1) { names.push("DD_" + i + "_" + (i + 1));
+                         names.push("UD_" + i + "_" + (i + 1)); }
   }
-  document.getElementById("login-btn").addEventListener("click", login);
-  document.getElementById("p").addEventListener("keydown",
-    e => { if (e.key === "Enter") login(); });
+  return names;
+}
+
+// mode "login": each Enter attempts a login (sample attached when clean).
+// mode "enroll": first login collects ENROLL_N rhythm samples of the password.
+const st = { mode: "login", password: "", samples: [], order: null };
+
+function showMsg(text) { $("msg").textContent = text ? "⚠ " + text : ""; $("msg").hidden = !text; }
+
+function drawDots() {
+  const dots = $("rhythm-dots");
+  dots.innerHTML = "";
+  for (let i = 0; i < ENROLL_N; i++) {
+    const d = document.createElement("div");
+    d.className = "dot" + (i < st.samples.length ? " filled" : "");
+    dots.appendChild(d);
+  }
+  $("rhythm-dots-text").innerHTML =
+    `Captured <strong>${st.samples.length}</strong> of ${ENROLL_N} — retype your password ` +
+    `and press Enter each time.`;
+}
+
+// Same capture scheme as the demo page: hold + flight timings, Enter included.
+let events = [];
+const input = $("p");
+
+input.addEventListener("keydown", (e) => {
+  if (e.repeat) return;
+  if (e.code === "Enter") { e.preventDefault(); events.push({ code:"Enter", down:e.timeStamp, up:null }); return; }
+  if (IGNORE.has(e.code)) return;
+  events.push({ code: e.code, down: e.timeStamp, up: null });
+});
+
+input.addEventListener("keyup", (e) => {
+  if (IGNORE.has(e.code)) return;
+  for (let i = events.length - 1; i >= 0; i--)
+    if (events[i].code === e.code && events[i].up === null) { events[i].up = e.timeStamp; break; }
+  if (e.code === "Enter") finalize();
+});
+
+function finalize() {
+  const typed = input.value;
+  const complete = events.filter(ev => ev.up !== null);
+  let feats = null, order = null;
+  if (typed && complete.length === typed.length + 1) {
+    const n = complete.length;
+    feats = [];
+    for (let i = 0; i < n; i++) {
+      feats.push(complete[i].up - complete[i].down);
+      if (i < n - 1) {
+        feats.push(complete[i + 1].down - complete[i].down);   // DD
+        feats.push(complete[i + 1].down - complete[i].up);     // UD
+      }
+    }
+    order = featureOrder(n);
+  }
+  events = [];
+  input.value = "";
+  if (st.mode === "enroll") bankEnrollSample(feats, order, typed);
+  else login(typed, feats, order);
+}
+
+async function login(password, sample, order) {
+  showMsg("");
+  const r = await fetch("/api/admin/login", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: $("u").value, password: password,
+                           sample: sample, feature_order: order }),
+  });
+  const out = await r.json();
+  if (r.ok && out.ok) { location.href = "/admin/dashboard"; return; }
+  if (r.ok && out.enroll_rhythm) { startEnroll(password); return; }
+  showMsg(out.error || "Invalid credentials.");
+}
+
+function startEnroll(password) {
+  st.mode = "enroll";
+  st.password = password;
+  st.samples = [];
+  $("login-title").textContent = "Set up your rhythm";
+  $("login-sub").textContent =
+    `Password accepted. Type it ${ENROLL_N} times so Sentinel learns your typing rhythm — ` +
+    `from then on, the right password in the wrong hands won't be enough.`;
+  $("u").disabled = true;
+  $("rhythm-dots-wrap").hidden = false;
+  $("login-btn").hidden = true;
+  drawDots();
+  input.focus();
+}
+
+async function bankEnrollSample(feats, order, typed) {
+  if (!feats) { showMsg("Typing glitch — retype it in one go, no corrections."); return; }
+  if (typed !== st.password) { showMsg("That doesn't match your password — try again."); return; }
+  showMsg("");
+  st.samples.push(feats);
+  st.order = order;
+  drawDots();
+  if (st.samples.length < ENROLL_N) return;
+  const r = await fetch("/api/admin/enroll_rhythm", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: $("u").value, password: st.password,
+                           samples: st.samples, feature_order: st.order }),
+  });
+  const out = await r.json();
+  if (r.ok && out.ok) { location.href = "/admin/dashboard"; return; }
+  st.samples = [];
+  drawDots();
+  showMsg(out.error || "Rhythm enrollment failed — try again.");
+}
+
+// The button covers the click-first habit; a clean sample still needs Enter,
+// and the server will say so when the rhythm check applies.
+$("login-btn").addEventListener("click", () => {
+  events = [];
+  login(input.value, null, null);
+});
 </script>
 
 {% else %}

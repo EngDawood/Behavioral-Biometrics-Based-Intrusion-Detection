@@ -12,13 +12,20 @@ detection service:
                               is flagged as an intrusion and temporarily locks that
                               account
     * admin monitoring     -- live statistics, an intrusion-alert feed, and a
-                              per-user drill-down with unlock / delete controls
+                              per-user drill-down with unlock / reset / delete
+    * self-service         -- a signed-in user changes their own phrase (which
+                              re-enrolls the rhythm with it), and an admin
+                              changes their own password or resets their rhythm
     * basic hardening       -- per-IP rate limiting on verification
 
 Design note: all lock and intrusion state is DERIVED from the `attempts` table.
-No extra tables or columns are added, so the six-table ERD in Chapter 4 stays
-exactly as designed. The backend still owns every decision; the browser only
-captures raw keystroke timings.
+Relative to the ERD in Chapter 4, the schema gains two nullable columns --
+users.password_hash (a per-user secret phrase, so the demo carries a knowledge
+factor next to the biometric one) and admins.profile_json (the admin's own
+keystroke-rhythm profile, used as a second login factor) -- and one table,
+`user_sessions`: an ACCEPTED verification signs the user in so they can view
+their own profile at /me. The backend still owns every decision; the browser
+only captures raw keystroke timings.
 
 Run:
     pip install -r requirements.txt
@@ -55,9 +62,26 @@ BASE_DIR = Path(__file__).parent
 DB_PATH = BASE_DIR / "demo.db"
 SCHEMA_PATH = BASE_DIR / "schema.sql"
 
-PHRASE = ".tie5Roanl"          # phrase every user types (matches the CMU password)
+PHRASE = ".tie5Roanl"          # default phrase (matches the CMU password)
 REQUIRED_SAMPLES = 10          # enrollment repetitions
 SESSION_HOURS = 8              # admin session lifetime
+
+# Custom-phrase policy. A phrase is also the timing template (3(n+1)-2 features
+# for n characters), so the bounds protect the biometric, not just the secret:
+# too short leaves too few features to tell people apart, too long is typed
+# inconsistently and inflates the user's own threshold.
+PHRASE_MIN = 10
+PHRASE_MAX = 20
+
+# Admin keystroke second factor: enrollment repetitions for the admin's rhythm
+# profile (fewer than user enrollment -- login friction matters more here).
+ADMIN_ENROLL_SAMPLES = 8
+
+# The admin rhythm factor is deliberately more forgiving than the user demo:
+# a false rejection here locks the only operator out of the console, which is
+# worse than the small extra tolerance it costs. The genuine admin is accepted
+# while their score stays within this multiple of their enrolled threshold.
+ADMIN_RHYTHM_MARGIN = 2.5
 
 # Decision policy.
 SUSPICIOUS_MARGIN = 1.15       # score in (threshold, threshold*margin] -> "suspicious"
@@ -98,9 +122,26 @@ def close_db(_exc=None):
         db.close()
 
 
+def _ensure_column(con, table: str, column: str, decl: str) -> None:
+    """Add a column to an existing table if a pre-migration demo.db lacks it."""
+    cols = [r[1] for r in con.execute(f"PRAGMA table_info({table})")]
+    if column not in cols:
+        con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+
+
 def init_db() -> None:
     con = sqlite3.connect(DB_PATH)
     con.executescript(SCHEMA_PATH.read_text())
+    # Databases created before the phrase / admin-rhythm features miss the two
+    # nullable columns; add them in place so existing demo data keeps working.
+    _ensure_column(con, "users", "password_hash", "TEXT")
+    _ensure_column(con, "admins", "profile_json", "TEXT")
+    # Every pre-migration user enrolled with the default phrase, so their
+    # knowledge factor is known and can be backfilled.
+    con.execute(
+        "UPDATE users SET password_hash = ? WHERE password_hash IS NULL",
+        (generate_password_hash(PHRASE),),
+    )
     if con.execute("SELECT 1 FROM admins WHERE username = ?", (ADMIN_USERNAME,)).fetchone() is None:
         con.execute(
             "INSERT INTO admins (username, password_hash, created_at) VALUES (?, ?, ?)",
@@ -108,6 +149,32 @@ def init_db() -> None:
         )
     con.commit()
     con.close()
+
+
+# --- phrase policy ----------------------------------------------------------
+def expected_features(phrase: str) -> int:
+    """Timing-vector length for a phrase: H, DD, UD per key, plus final Enter."""
+    return 3 * (len(phrase) + 1) - 2
+
+
+def validate_phrase(phrase: str) -> str | None:
+    """Check a user-chosen phrase against the policy. Returns an error or None.
+
+    Mirrors the client-side check in index.html; this copy is authoritative.
+    Printable ASCII only: IME / non-Latin input produces key events that do not
+    map 1:1 to characters, which breaks keystroke capture in the browser.
+    """
+    if len(phrase) < PHRASE_MIN:
+        return f"phrase must be at least {PHRASE_MIN} characters"
+    if len(phrase) > PHRASE_MAX:
+        return f"phrase must be at most {PHRASE_MAX} characters"
+    if not all("!" <= c <= "~" for c in phrase):
+        return "phrase must use printable ASCII characters only, without spaces"
+    if not any(c.isdigit() for c in phrase):
+        return "phrase must include at least one number"
+    if not any(not c.isalnum() for c in phrase):
+        return "phrase must include at least one symbol"
+    return None
 
 
 # --- decision + intrusion logic (all derived from `attempts`) --------------
@@ -279,26 +346,79 @@ def admin_required(view):
     return wrapped
 
 
+# --- user auth (demo users, signed in by an accepted verification) ----------
+def current_user():
+    token = request.cookies.get("user_token")
+    if not token:
+        return None
+    row = get_db().execute(
+        "SELECT s.user_id, s.expires_at, u.username "
+        "FROM user_sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?",
+        (token,),
+    ).fetchone()
+    if row is None or datetime.fromisoformat(row["expires_at"]) < datetime.now(timezone.utc):
+        return None
+    return row
+
+
+def user_required(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        if current_user() is None:
+            if request.path.startswith("/api/"):
+                return jsonify(error="sign in by verifying your typing rhythm first"), 401
+            return redirect(url_for("index"))
+        return view(*args, **kwargs)
+
+    return wrapped
+
+
+def issue_user_session(db, user_id: int, resp):
+    """Attach a fresh user-session cookie to an already-built response."""
+    token = secrets.token_urlsafe(32)
+    expires = datetime.now(timezone.utc) + timedelta(hours=SESSION_HOURS)
+    db.execute(
+        "INSERT INTO user_sessions (user_id, token, created_at, expires_at) VALUES (?, ?, ?, ?)",
+        (user_id, token, now_iso(), expires.isoformat()),
+    )
+    db.commit()
+    resp.set_cookie("user_token", token, httponly=True, samesite="Lax",
+                    max_age=SESSION_HOURS * 3600)
+    return resp
+
+
 @app.context_processor
 def inject_nav():
-    """Feed the shared sidebar partial on every admin screen.
+    """Feed shared navigation state into every template.
 
     `_sidebar.html` needs the signed-in admin and the unacknowledged-alert count
-    on all six admin pages, so they are injected once here rather than repeated
-    in every route. Public pages carry no admin cookie and skip the queries.
+    on all six admin pages; the public nav needs the signed-in demo user so home
+    and the other public pages can reflect the login. Each block is skipped when
+    its cookie is absent, so a plain anonymous request runs no extra queries.
     """
-    if not request.cookies.get("admin_token"):
-        return {}
-    admin = current_admin()
-    if admin is None:
-        return {}
-    return {"admin": admin["username"], "open_alerts": len(open_intrusions(get_db()))}
+    ctx = {}
+    if request.cookies.get("admin_token"):
+        admin = current_admin()
+        if admin is not None:
+            ctx["admin"] = admin["username"]
+            ctx["open_alerts"] = len(open_intrusions(get_db()))
+    if request.cookies.get("user_token"):
+        user = current_user()
+        if user is not None:
+            ctx["signed_in_user"] = user["username"]
+    return ctx
 
 
 # --- public pages ----------------------------------------------------------
 @app.route("/")
 def index():
-    return render_template("index.html", phrase=PHRASE, required_samples=REQUIRED_SAMPLES)
+    return render_template(
+        "index.html",
+        phrase=PHRASE,
+        required_samples=REQUIRED_SAMPLES,
+        phrase_min=PHRASE_MIN,
+        phrase_max=PHRASE_MAX,
+    )
 
 
 @app.route("/about")
@@ -325,11 +445,145 @@ def project():
     return render_template("project.html")
 
 
+@app.route("/me")
+@user_required
+def me():
+    """A signed-in user's own view: their profile stats and attempt history.
+
+    The user-owned twin of the admin drill-down -- same derived data, no
+    controls. Reached only through an ACCEPTED verification (see api_verify).
+    """
+    db = get_db()
+    user = current_user()
+    username = user["username"]
+
+    profile = db.execute(
+        "SELECT p.n_samples, p.threshold, p.updated_at FROM profiles p "
+        "WHERE p.user_id = ?",
+        (user["user_id"],),
+    ).fetchone()
+
+    rows = db.execute(
+        "SELECT id, score, threshold, accepted, created_at "
+        "FROM attempts WHERE username = ? ORDER BY id DESC LIMIT 50",
+        (username,),
+    ).fetchall()
+    attempts = [{**dict(r), "band": band_of(r)} for r in rows]
+
+    n_attempts = db.execute(
+        "SELECT COUNT(*) c FROM attempts WHERE username = ?", (username,)
+    ).fetchone()["c"]
+    n_accepted = db.execute(
+        "SELECT COUNT(*) c FROM attempts WHERE username = ? AND accepted = 1", (username,)
+    ).fetchone()["c"]
+    is_locked, remaining = lock_status(db, username)
+
+    return render_template(
+        "me.html",
+        username=username,
+        profile=profile,
+        attempts=attempts,
+        n_attempts=n_attempts,
+        accept_rate=round(100 * n_accepted / n_attempts, 1) if n_attempts else None,
+        is_locked=is_locked,
+        remaining=remaining,
+        required_samples=REQUIRED_SAMPLES,
+        phrase_min=PHRASE_MIN,
+        phrase_max=PHRASE_MAX,
+    )
+
+
+@app.post("/api/user/password")
+@user_required
+def api_user_password():
+    """Change the signed-in user's phrase, re-enrolling their rhythm with it.
+
+    The phrase is the secret AND the timing template, so a new phrase makes the
+    old profile meaningless -- a 12-character phrase does not even produce a
+    vector the old profile could score. The change therefore only completes if
+    the user also types the new phrase REQUIRED_SAMPLES times, and the hash and
+    the rebuilt profile are written in the same transaction: the account is
+    never left holding a phrase its profile was not trained on.
+    """
+    data = request.get_json(silent=True) or {}
+    old_phrase = data.get("old_phrase") or ""
+    new_phrase = data.get("new_phrase") or ""
+    samples = data.get("samples")
+    feature_order = data.get("feature_order")
+
+    db = get_db()
+    user = current_user()
+    row = db.execute(
+        "SELECT password_hash FROM users WHERE id = ?", (user["user_id"],)
+    ).fetchone()
+    if not row["password_hash"] or not check_password_hash(row["password_hash"], old_phrase):
+        return jsonify(error="current phrase is not correct"), 401
+
+    err = validate_phrase(new_phrase)
+    if err:
+        return jsonify(error=err), 400
+    if new_phrase == old_phrase:
+        return jsonify(error="the new phrase must differ from the current one"), 400
+    if not samples or len(samples) < REQUIRED_SAMPLES:
+        return jsonify(error=f"need {REQUIRED_SAMPLES} samples of the new phrase"), 400
+    n_features = expected_features(new_phrase)
+    if any(len(s) != n_features for s in samples):
+        return jsonify(
+            error=f"each sample must carry {n_features} timing features "
+                  f"for a {len(new_phrase)}-character phrase"
+        ), 400
+
+    try:
+        profile = store_enrollment(db, user["user_id"], samples, feature_order)
+    except ValueError as exc:
+        db.rollback()
+        return jsonify(error=str(exc)), 400
+
+    db.execute(
+        "UPDATE users SET password_hash = ? WHERE id = ?",
+        (generate_password_hash(new_phrase), user["user_id"]),
+    )
+    # A credential change ends every other session for this account; the one
+    # making the change stays signed in.
+    db.execute(
+        "DELETE FROM user_sessions WHERE user_id = ? AND token != ?",
+        (user["user_id"], request.cookies.get("user_token")),
+    )
+    db.commit()
+    return jsonify(ok=True, n_samples=profile["n_samples"],
+                   threshold=round(profile["threshold"], 3))
+
+
+@app.post("/api/user/logout")
+def api_user_logout():
+    token = request.cookies.get("user_token")
+    if token:
+        get_db().execute("DELETE FROM user_sessions WHERE token = ?", (token,))
+        get_db().commit()
+    resp = jsonify(ok=True)
+    resp.delete_cookie("user_token")
+    return resp
+
+
+@app.route("/logout")
+def user_logout():
+    """Clear a demo-user session and return home. A plain link, so the nav on
+    any public page can log out without its own script."""
+    resp = redirect(url_for("index"))
+    token = request.cookies.get("user_token")
+    if token:
+        get_db().execute("DELETE FROM user_sessions WHERE token = ?", (token,))
+        get_db().commit()
+    resp.delete_cookie("user_token")
+    return resp
+
+
 @app.route("/admin")
 def admin_login_page():
     if current_admin() is not None:
         return redirect(url_for("admin_dashboard"))
-    return render_template("admin.html", logged_in=False)
+    return render_template("admin.html", logged_in=False,
+                           admin_enroll_samples=ADMIN_ENROLL_SAMPLES)
 
 
 @app.route("/admin/dashboard")
@@ -687,6 +941,44 @@ def admin_policy():
     )
 
 
+@app.route("/admin/account")
+@admin_required
+def admin_account():
+    """The signed-in admin's own account: their two factors and their audit trail.
+
+    The admin twin of /me. It is the only screen that reads `admin_actions` as
+    history rather than as acknowledgement state, and it is scoped to the
+    signed-in admin -- an operator reviews what they themselves did.
+    """
+    db = get_db()
+    admin = current_admin()
+
+    account = db.execute(
+        "SELECT username, profile_json, created_at FROM admins WHERE id = ?",
+        (admin["admin_id"],),
+    ).fetchone()
+    actions = db.execute(
+        "SELECT action, target, detail, created_at FROM admin_actions "
+        "WHERE admin_id = ? ORDER BY id DESC LIMIT 20",
+        (admin["admin_id"],),
+    ).fetchall()
+    n_sessions = db.execute(
+        "SELECT COUNT(*) c FROM sessions WHERE admin_id = ? AND expires_at > ?",
+        (admin["admin_id"], now_iso()),
+    ).fetchone()["c"]
+
+    return render_template(
+        "account.html",
+        account=account,
+        has_rhythm=account["profile_json"] is not None,
+        actions=actions,
+        n_sessions=n_sessions,
+        phrase_min=PHRASE_MIN,
+        phrase_max=PHRASE_MAX,
+        admin_enroll_samples=ADMIN_ENROLL_SAMPLES,
+    )
+
+
 @app.route("/admin/user/<username>")
 @admin_required
 def admin_user(username):
@@ -716,41 +1008,23 @@ def admin_user(username):
 
 
 # --- API: enroll -----------------------------------------------------------
-@app.post("/api/enroll")
-def api_enroll():
-    data = request.get_json(silent=True) or {}
-    username = (data.get("username") or "").strip()
-    samples = data.get("samples")
-    feature_order = data.get("feature_order")
+def store_enrollment(db, user_id: int, samples, feature_order):
+    """Rebuild a user's enrollment from scratch: samples, profile, lock state.
 
-    if not username or not samples:
-        return jsonify(error="username and samples are required"), 400
-    if len(samples) < 2:
-        return jsonify(error="need at least 2 samples to enroll"), 400
+    Shared by first enrollment and by a phrase change, because both have to
+    rebuild the same way -- a profile only means anything for the phrase it was
+    trained on. The model is fitted before anything is written, so a bad sample
+    set raises ValueError while the database is still untouched. The caller owns
+    the transaction.
+    """
+    profile = keystroke_model.enroll(samples, feature_order=feature_order)
 
-    db = get_db()
-    row = db.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
-    if row is None:
-        cur = db.execute(
-            "INSERT INTO users (username, created_at) VALUES (?, ?)", (username, now_iso())
-        )
-        user_id = cur.lastrowid
-    else:
-        user_id = row["id"]
-        # Re-enrollment: replace old samples so the profile is rebuilt cleanly.
-        db.execute("DELETE FROM enrollment_samples WHERE user_id = ?", (user_id,))
-
+    db.execute("DELETE FROM enrollment_samples WHERE user_id = ?", (user_id,))
     for sample in samples:
         db.execute(
             "INSERT INTO enrollment_samples (user_id, features, created_at) VALUES (?, ?, ?)",
             (user_id, json.dumps(sample), now_iso()),
         )
-
-    try:
-        profile = keystroke_model.enroll(samples, feature_order=feature_order)
-    except ValueError as exc:
-        db.rollback()
-        return jsonify(error=str(exc)), 400
 
     db.execute("DELETE FROM profiles WHERE user_id = ?", (user_id,))
     db.execute(
@@ -761,6 +1035,65 @@ def api_enroll():
     )
     # A fresh enrollment clears any prior failed-attempt streak / lock.
     db.execute("DELETE FROM attempts WHERE user_id = ?", (user_id,))
+    return profile
+
+
+@app.post("/api/enroll")
+def api_enroll():
+    data = request.get_json(silent=True) or {}
+    username = (data.get("username") or "").strip()
+    password = data.get("password") or ""
+    samples = data.get("samples")
+    feature_order = data.get("feature_order")
+
+    if not username or not samples:
+        return jsonify(error="username and samples are required"), 400
+    if len(samples) < 2:
+        return jsonify(error="need at least 2 samples to enroll"), 400
+
+    # The phrase is both the secret and the timing template. No custom phrase
+    # means the default one; a custom phrase must pass the policy, and either
+    # way every sample must have the feature count that phrase implies.
+    if password:
+        err = validate_phrase(password)
+        if err:
+            return jsonify(error=err), 400
+    else:
+        password = PHRASE
+    n_features = expected_features(password)
+    if any(len(s) != n_features for s in samples):
+        return jsonify(
+            error=f"each sample must carry {n_features} timing features "
+                  f"for a {len(password)}-character phrase"
+        ), 400
+
+    db = get_db()
+    # Usernames are matched case-insensitively, so enrolling "dawood" when
+    # "Dawood" already exists re-enrolls that same account rather than making a
+    # second one. The stored casing is kept as first entered.
+    row = db.execute(
+        "SELECT id FROM users WHERE username = ? COLLATE NOCASE", (username,)
+    ).fetchone()
+    if row is None:
+        cur = db.execute(
+            "INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)",
+            (username, generate_password_hash(password), now_iso()),
+        )
+        user_id = cur.lastrowid
+    else:
+        user_id = row["id"]
+        # Re-enrollment: rebind the knowledge factor to the phrase actually typed
+        # this time (store_enrollment replaces the samples and the profile).
+        db.execute(
+            "UPDATE users SET password_hash = ? WHERE id = ?",
+            (generate_password_hash(password), user_id),
+        )
+
+    try:
+        profile = store_enrollment(db, user_id, samples, feature_order)
+    except ValueError as exc:
+        db.rollback()
+        return jsonify(error=str(exc)), 400
     db.commit()
     return jsonify(ok=True, username=username, n_samples=profile["n_samples"],
                    threshold=round(profile["threshold"], 3))
@@ -775,13 +1108,25 @@ def api_verify():
 
     data = request.get_json(silent=True) or {}
     username = (data.get("username") or "").strip()
+    typed = data.get("password")
     sample = data.get("sample")
     feature_order = data.get("feature_order")
 
     if not username or not sample:
         return jsonify(error="username and sample are required"), 400
+    if typed is None:
+        return jsonify(error="password (the typed phrase) is required"), 400
 
     db = get_db()
+
+    # Resolve the username case-insensitively to its stored casing, so "dawood"
+    # verifies against the profile enrolled as "Dawood". Everything downstream
+    # (lock state, attempt logging, streaks) then keys off one canonical name.
+    canon = db.execute(
+        "SELECT username FROM users WHERE username = ? COLLATE NOCASE", (username,)
+    ).fetchone()
+    if canon is not None:
+        username = canon["username"]
 
     # Locked accounts are refused before any scoring, and the refusal is not
     # logged, so the lock window stays anchored to the triggering failure.
@@ -791,7 +1136,7 @@ def api_verify():
                        retry_after=remaining), 423
 
     row = db.execute(
-        "SELECT p.profile_json, u.id AS user_id FROM profiles p "
+        "SELECT p.profile_json, u.id AS user_id, u.password_hash FROM profiles p "
         "JOIN users u ON u.id = p.user_id WHERE u.username = ?",
         (username,),
     ).fetchone()
@@ -804,6 +1149,27 @@ def api_verify():
         )
         db.commit()
         return jsonify(error="no profile for that username", accepted=False), 404
+
+    # Knowledge factor first: the typed text must match the enrolled phrase
+    # before the rhythm is even scored. A wrong phrase is logged as a scoreless
+    # reject, so it feeds the same failure-streak / lock policy as a bad rhythm.
+    if not check_password_hash(row["password_hash"], typed):
+        db.execute(
+            "INSERT INTO attempts (user_id, username, score, threshold, accepted, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (row["user_id"], username, None, None, 0, now_iso()),
+        )
+        db.commit()
+        streak, _ = trailing_failure_streak(db, username)
+        intrusion = streak >= FAIL_LOCK_STREAK
+        return jsonify(
+            error="phrase does not match the enrolled one",
+            accepted=False,
+            intrusion=intrusion,
+            locked=intrusion,
+            retry_after=LOCK_COOLDOWN_MIN * 60 if intrusion else 0,
+            fail_streak=streak,
+        ), 401
 
     profile = json.loads(row["profile_json"])
     try:
@@ -826,7 +1192,7 @@ def api_verify():
     streak, _ = trailing_failure_streak(db, username)
     intrusion = (not accepted) and streak >= FAIL_LOCK_STREAK
 
-    return jsonify(
+    resp = jsonify(
         accepted=accepted,
         band=band,
         score=round(result["score"], 3),
@@ -837,6 +1203,12 @@ def api_verify():
         retry_after=LOCK_COOLDOWN_MIN * 60 if intrusion else 0,
         fail_streak=streak,
     )
+    # An accepted verification IS the login: both factors just passed, so the
+    # user gets a session and can view their own profile at /me. A suspicious
+    # band is flagged, not trusted -- no session.
+    if accepted:
+        issue_user_session(db, row["user_id"], resp)
+    return resp
 
 
 def hold_deviations(profile, deviations):
@@ -858,24 +1230,13 @@ def hold_deviations(profile, deviations):
 
 
 # --- API: admin login / logout / management --------------------------------
-@app.post("/api/admin/login")
-def api_admin_login():
-    data = request.get_json(silent=True) or {}
-    username = (data.get("username") or "").strip()
-    password = data.get("password") or ""
-
-    db = get_db()
-    admin = db.execute(
-        "SELECT id, password_hash FROM admins WHERE username = ?", (username,)
-    ).fetchone()
-    if admin is None or not check_password_hash(admin["password_hash"], password):
-        return jsonify(error="invalid credentials"), 401
-
+def issue_admin_session(db, admin_id: int):
+    """Create a session row and return the ok-response carrying its cookie."""
     token = secrets.token_urlsafe(32)
     expires = datetime.now(timezone.utc) + timedelta(hours=SESSION_HOURS)
     db.execute(
         "INSERT INTO sessions (admin_id, token, created_at, expires_at) VALUES (?, ?, ?, ?)",
-        (admin["id"], token, now_iso(), expires.isoformat()),
+        (admin_id, token, now_iso(), expires.isoformat()),
     )
     db.commit()
     resp = jsonify(ok=True)
@@ -884,12 +1245,175 @@ def api_admin_login():
     return resp
 
 
+@app.post("/api/admin/login")
+def api_admin_login():
+    """Two-factor admin login: password hash first, then keystroke rhythm.
+
+    An admin with no rhythm profile yet is told to enroll one (the client then
+    walks them through it); once a profile exists, a login must carry a timing
+    sample whose score lands within ADMIN_RHYTHM_MARGIN of the enrolled
+    threshold. That generous margin -- rather than the bare threshold -- keeps
+    a slightly-off day from locking the only admin out of the console.
+    """
+    data = request.get_json(silent=True) or {}
+    username = (data.get("username") or "").strip()
+    password = data.get("password") or ""
+    sample = data.get("sample")
+    feature_order = data.get("feature_order")
+
+    db = get_db()
+    admin = db.execute(
+        "SELECT id, password_hash, profile_json FROM admins WHERE username = ?", (username,)
+    ).fetchone()
+    if admin is None or not check_password_hash(admin["password_hash"], password):
+        return jsonify(error="invalid credentials"), 401
+
+    if admin["profile_json"] is None:
+        return jsonify(ok=False, enroll_rhythm=True, samples_needed=ADMIN_ENROLL_SAMPLES)
+
+    if not sample:
+        return jsonify(error="keystroke sample required — type your password "
+                             "and press Enter, without corrections"), 401
+    try:
+        result = keystroke_model.verify(
+            json.loads(admin["profile_json"]), sample, feature_order=feature_order
+        )
+    except ValueError:
+        return jsonify(error="could not read your typing rhythm — retype your "
+                             "password cleanly and press Enter"), 401
+    if result["score"] > result["threshold"] * ADMIN_RHYTHM_MARGIN:
+        return jsonify(error="password correct, but the typing rhythm does not "
+                             "match this admin"), 401
+
+    return issue_admin_session(db, admin["id"])
+
+
+@app.post("/api/admin/enroll_rhythm")
+def api_admin_enroll_rhythm():
+    """First-login rhythm enrollment for an admin, then sign them in.
+
+    Guarded by the admin password itself (there is no session yet), and only
+    allowed while the admin has no profile -- re-enrollment would let a stolen
+    password overwrite the biometric factor.
+    """
+    data = request.get_json(silent=True) or {}
+    username = (data.get("username") or "").strip()
+    password = data.get("password") or ""
+    samples = data.get("samples")
+    feature_order = data.get("feature_order")
+
+    db = get_db()
+    admin = db.execute(
+        "SELECT id, password_hash, profile_json FROM admins WHERE username = ?", (username,)
+    ).fetchone()
+    if admin is None or not check_password_hash(admin["password_hash"], password):
+        return jsonify(error="invalid credentials"), 401
+    if admin["profile_json"] is not None:
+        return jsonify(error="rhythm profile already enrolled"), 409
+
+    if not samples or len(samples) < ADMIN_ENROLL_SAMPLES:
+        return jsonify(error=f"need {ADMIN_ENROLL_SAMPLES} samples"), 400
+    n_features = expected_features(password)
+    if any(len(s) != n_features for s in samples):
+        return jsonify(error="sample does not match the password length"), 400
+
+    try:
+        profile = keystroke_model.enroll(samples, feature_order=feature_order)
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+
+    db.execute(
+        "UPDATE admins SET profile_json = ? WHERE id = ?",
+        (json.dumps(profile), admin["id"]),
+    )
+    db.execute(
+        "INSERT INTO admin_actions (admin_id, action, target, detail, created_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (admin["id"], "enroll_rhythm", username, None, now_iso()),
+    )
+    return issue_admin_session(db, admin["id"])
+
+
 @app.post("/api/admin/logout")
 def api_admin_logout():
     token = request.cookies.get("admin_token")
     if token:
         get_db().execute("DELETE FROM sessions WHERE token = ?", (token,))
         get_db().commit()
+    resp = jsonify(ok=True)
+    resp.delete_cookie("admin_token")
+    return resp
+
+
+@app.post("/api/admin/password")
+@admin_required
+def api_admin_password():
+    """Change the signed-in admin's own password.
+
+    The admin's rhythm profile is enrolled on the password text itself, so a new
+    password invalidates the biometric factor along with the old secret:
+    profile_json is cleared and the next login walks the admin through rhythm
+    enrollment again. The new password must pass the same phrase policy as a
+    user's -- the length bounds exist because the text is a timing template.
+    """
+    data = request.get_json(silent=True) or {}
+    old_password = data.get("old_password") or ""
+    new_password = data.get("new_password") or ""
+
+    db = get_db()
+    admin = current_admin()
+    row = db.execute(
+        "SELECT password_hash FROM admins WHERE id = ?", (admin["admin_id"],)
+    ).fetchone()
+    if not check_password_hash(row["password_hash"], old_password):
+        return jsonify(error="current password is not correct"), 401
+
+    err = validate_phrase(new_password)
+    if err:
+        return jsonify(error=err), 400
+    if new_password == old_password:
+        return jsonify(error="the new password must differ from the current one"), 400
+
+    db.execute(
+        "UPDATE admins SET password_hash = ?, profile_json = NULL WHERE id = ?",
+        (generate_password_hash(new_password), admin["admin_id"]),
+    )
+    log_admin_action(db, "change_password", admin["username"])
+    # Other consoles signed in on the old password are dropped; this one stays.
+    db.execute(
+        "DELETE FROM sessions WHERE admin_id = ? AND token != ?",
+        (admin["admin_id"], request.cookies.get("admin_token")),
+    )
+    db.commit()
+    return jsonify(ok=True)
+
+
+@app.post("/api/admin/rhythm/reset")
+@admin_required
+def api_admin_reset_rhythm():
+    """Drop the admin's own rhythm profile so it can be enrolled again.
+
+    The escape hatch for a rhythm that has drifted far enough to keep failing
+    login. Guarded by the password, like the enrollment it re-opens, and it ends
+    every session including this one -- the admin comes back through /admin,
+    where the login flow collects the new samples.
+    """
+    data = request.get_json(silent=True) or {}
+    password = data.get("password") or ""
+
+    db = get_db()
+    admin = current_admin()
+    row = db.execute(
+        "SELECT password_hash FROM admins WHERE id = ?", (admin["admin_id"],)
+    ).fetchone()
+    if not check_password_hash(row["password_hash"], password):
+        return jsonify(error="password is not correct"), 401
+
+    db.execute("UPDATE admins SET profile_json = NULL WHERE id = ?", (admin["admin_id"],))
+    log_admin_action(db, "reset_rhythm", admin["username"])
+    db.execute("DELETE FROM sessions WHERE admin_id = ?", (admin["admin_id"],))
+    db.commit()
+
     resp = jsonify(ok=True)
     resp.delete_cookie("admin_token")
     return resp
@@ -916,6 +1440,34 @@ def api_delete_user(username):
         db.execute("DELETE FROM users WHERE id = ?", (row["id"],))  # cascades
     db.execute("DELETE FROM attempts WHERE username = ?", (username,))
     log_admin_action(db, "delete", username)
+    db.commit()
+    return jsonify(ok=True)
+
+
+@app.post("/api/admin/user/<username>/reset")
+@admin_required
+def api_reset_user(username):
+    """Force a user back to enrollment: profile, samples, attempts and sessions go.
+
+    The milder sibling of delete -- the account survives, but it can no longer
+    authenticate until the user enrolls a fresh phrase and rhythm.
+
+    The phrase hash is deliberately left in place rather than nulled: a NULL
+    hash is exactly what init_db backfills with the default phrase, so clearing
+    it would quietly hand this account that phrase on the next restart. It is
+    inert as it stands -- verification needs a profile, and re-enrollment
+    rebinds the hash to whatever phrase the user then chooses.
+    """
+    db = get_db()
+    row = db.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
+    if row is None:
+        return jsonify(error="no such user"), 404
+
+    db.execute("DELETE FROM profiles WHERE user_id = ?", (row["id"],))
+    db.execute("DELETE FROM enrollment_samples WHERE user_id = ?", (row["id"],))
+    db.execute("DELETE FROM user_sessions WHERE user_id = ?", (row["id"],))
+    db.execute("DELETE FROM attempts WHERE username = ?", (username,))
+    log_admin_action(db, "reset", username)
     db.commit()
     return jsonify(ok=True)
 

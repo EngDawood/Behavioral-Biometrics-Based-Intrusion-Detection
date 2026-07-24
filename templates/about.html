@@ -22,8 +22,14 @@
     <a href="/#flow">Demo</a>
   </nav>
   <div class="nav-cta">
+    {% if signed_in_user %}
+    <a class="quiet" href="/me">◈ {{ signed_in_user }}</a>
+    <a class="btn btn-ghost btn-sm" href="/me">My profile</a>
+    <a class="btn btn-accent btn-sm" href="/logout">Log out</a>
+    {% else %}
     <a class="quiet" href="/admin">Sign in</a>
     <a class="btn btn-accent btn-sm" href="/#flow">Try it now</a>
+    {% endif %}
   </div>
 </header>
 

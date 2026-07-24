@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ username }} — My profile — Sentinel</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='sentinel.css') }}">
+</head>
+<body>
+
+<header class="nav">
+  <a class="brand" href="/">
+    <span class="mark">◈</span><span class="brand-name">Sentinel</span>
+  </a>
+  <nav class="nav-links">
+    <a href="/about">How it works</a>
+    <a href="/project">The project</a>
+    <a href="/#flow">Demo</a>
+  </nav>
+  <div class="nav-cta">
+    <span class="quiet">{{ username }}</span>
+    <button class="btn btn-ghost btn-sm" id="logout-btn">Log out</button>
+  </div>
+</header>
+
+<section class="how">
+  <div class="main-head">
+    <div>
+      <h2>My profile</h2>
+      <div class="sub">Signed in by your typing rhythm · session lasts 8h</div>
+    </div>
+    <span class="chip {% if is_locked %}chip-bad{% elif profile %}chip-ok{% else %}chip-warn{% endif %}">
+      {% if is_locked %}✕ LOCKED{% elif profile %}✓ ENROLLED{% else %}! NO PROFILE{% endif %}
+    </span>
+  </div>
+
+  {% if is_locked %}
+  <div class="alert">⚠ Too many failed attempts — verification is locked for about
+    {{ (remaining // 60) + 1 }} more min. Your profile stays viewable.</div>
+  {% endif %}
+
+  <div class="box">
+    <div class="box-head">
+      <span class="t">Enrollment</span>
+      <span class="n">scaled-manhattan</span>
+    </div>
+    <div class="box-body">
+      <div class="kvrow">
+        <div class="kv">
+          <div class="k">USERNAME</div>
+          <div class="v">{{ username }}</div>
+        </div>
+        {% if profile %}
+        <div class="kv">
+          <div class="k">ENROLLMENT SAMPLES</div>
+          <div class="v">{{ profile.n_samples }}</div>
+        </div>
+        <div class="kv">
+          <div class="k">ACCEPT THRESHOLD</div>
+          <div class="v">{{ "%.2f"|format(profile.threshold) }}</div>
+        </div>
+        <div class="kv">
+          <div class="k">PROFILE UPDATED</div>
+          <div class="v">{{ profile.updated_at[:19].replace("T", " ") }}</div>
+        </div>
+        {% endif %}
+        {% if accept_rate is not none %}
+        <div class="kv">
+          <div class="k">ACCEPT RATE</div>
+          <div class="v">{{ accept_rate }}%</div>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="box">
+    <div class="box-head">
+      <span class="t">Secret phrase</span>
+      <span class="n">{{ phrase_min }}–{{ phrase_max }} chars · 1 number · 1 symbol</span>
+    </div>
+    <div class="box-body">
+
+      <!-- Stage 1: prove the old phrase, choose the new one. -->
+      <div class="form" id="pw-form">
+        <div class="hint">Your phrase is both your secret and the rhythm Sentinel knows you by, so
+          changing it re-teaches your profile from scratch: choose a new phrase, then type it
+          {{ required_samples }} times. Nothing changes until the last sample lands.</div>
+
+        <label class="field-label" for="old-phrase">CURRENT PHRASE</label>
+        <input id="old-phrase" class="input mono" type="password" autocomplete="current-password"
+               autocorrect="off" autocapitalize="off" spellcheck="false">
+
+        <label class="field-label" for="new-phrase">NEW PHRASE</label>
+        <input id="new-phrase" class="input mono" type="text" autocomplete="off"
+               autocorrect="off" autocapitalize="off" spellcheck="false">
+
+        <div class="err" id="pw-msg" hidden></div>
+        <div class="actions">
+          <button class="btn btn-accent btn-sm" id="pw-next">Continue</button>
+        </div>
+      </div>
+
+      <!-- Stage 2: bank REQUIRED samples of the new phrase. -->
+      <div class="form" id="pw-capture" hidden>
+        <div class="hint">Type the new phrase naturally, the way you always would, and press Enter
+          after each one. Corrections void a sample — retype it in one go.</div>
+        <div class="phrase" id="pw-phrase"></div>
+        <label class="field-label" for="pw-input">SAMPLE</label>
+        <input id="pw-input" class="input mono" type="text" autocomplete="off"
+               autocorrect="off" autocapitalize="off" spellcheck="false">
+        <div class="dots-wrap">
+          <div class="dots" id="pw-dots"></div>
+          <div class="dots-text" id="pw-dots-text"></div>
+        </div>
+        <div class="err" id="cap-msg" hidden></div>
+        <div class="actions">
+          <button class="btn btn-ghost btn-sm" id="pw-cancel">Cancel</button>
+        </div>
+      </div>
+
+      <div class="err good" id="pw-done" hidden></div>
+    </div>
+  </div>
+
+  <div class="box">
+    <div class="box-head">
+      <span class="t">My attempt history</span>
+      <span class="n">latest {{ attempts|length }} of {{ n_attempts }}</span>
+    </div>
+    {% if attempts %}
+    <table>
+      <thead>
+        <tr><th>#</th><th>DISTANCE</th><th>THRESHOLD</th><th>DECISION</th><th>TIME (UTC)</th></tr>
+      </thead>
+      <tbody>
+        {% for a in attempts %}
+        <tr>
+          <td class="mono">{{ a.id }}</td>
+          <td class="mono">{{ "%.2f"|format(a.score) if a.score is not none else "—" }}</td>
+          <td class="mono">{{ "%.2f"|format(a.threshold) if a.threshold is not none else "—" }}</td>
+          <td><span class="pill {{ a.band }}">{{ a.band|upper }}</span></td>
+          <td class="time">{{ a.created_at[:19].replace("T", " ") }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty">No attempts recorded yet.</div>
+    {% endif %}
+  </div>
+</section>
+
+<footer class="foot">
+  <span>◈ Sentinel · behavioral biometrics</span>
+  <span><a href="/#flow">Verify again</a> · keystroke dynamics IDS</span>
+</footer>
+
+<script>
+const REQUIRED   = {{ required_samples }};
+const PHRASE_MIN = {{ phrase_min }};
+const PHRASE_MAX = {{ phrase_max }};
+
+const $ = (id) => document.getElementById(id);
+
+$("logout-btn").addEventListener("click", async () => {
+  await fetch("/api/user/logout", { method: "POST" });
+  location.href = "/";
+});
+
+// Client-side mirror of validate_phrase() in app.py; the server copy is
+// authoritative, this one just gives instant feedback.
+function phraseError(p) {
+  if (p.length < PHRASE_MIN) return `Phrase must be at least ${PHRASE_MIN} characters.`;
+  if (p.length > PHRASE_MAX) return `Phrase must be at most ${PHRASE_MAX} characters.`;
+  if (!/^[\x21-\x7E]+$/.test(p)) return "Printable ASCII only — no spaces or special layouts.";
+  if (!/[0-9]/.test(p)) return "Phrase must include at least one number.";
+  if (!/[^A-Za-z0-9]/.test(p)) return "Phrase must include at least one symbol.";
+  return null;
+}
+
+// Keys that are not part of the typed phrase and must be ignored.
+const IGNORE = new Set(["ShiftLeft","ShiftRight","AltLeft","AltRight",
+  "ControlLeft","ControlRight","MetaLeft","MetaRight","CapsLock","Tab"]);
+
+// Same feature layout as enrollment on the demo page: H, DD, UD interleaved per
+// key plus a trailing Enter, so the server can score both against one profile.
+function featureOrder(nKeys) {
+  const names = [];
+  for (let i = 0; i < nKeys; i++) {
+    names.push("H_" + i);
+    if (i < nKeys - 1) { names.push("DD_" + i + "_" + (i + 1));
+                         names.push("UD_" + i + "_" + (i + 1)); }
+  }
+  return names;
+}
+
+const st = { oldPhrase: "", newPhrase: "", samples: [], order: null };
+
+function showMsg(id, text, good) {
+  const box = $(id);
+  box.textContent = text ? (good ? "✓ " : "⚠ ") + text : "";
+  box.className = good ? "err good" : "err";
+  box.hidden = !text;
+}
+
+function drawDots() {
+  const dots = $("pw-dots");
+  dots.innerHTML = "";
+  for (let i = 0; i < REQUIRED; i++) {
+    const d = document.createElement("div");
+    d.className = "dot" + (i < st.samples.length ? " filled" : "");
+    dots.appendChild(d);
+  }
+  const left = Math.max(0, REQUIRED - st.samples.length);
+  $("pw-dots-text").innerHTML =
+    `Captured <strong>${st.samples.length}</strong> of ${REQUIRED} — ${left} to go.`;
+}
+
+// ---- capture --------------------------------------------------------------
+let events = [];
+const input = $("pw-input");
+
+input.addEventListener("keydown", (e) => {
+  if (e.repeat) return;
+  if (e.code === "Enter") { e.preventDefault(); events.push({ code:"Enter", down:e.timeStamp, up:null }); return; }
+  if (IGNORE.has(e.code)) return;
+  events.push({ code: e.code, down: e.timeStamp, up: null });
+});
+
+input.addEventListener("keyup", (e) => {
+  if (IGNORE.has(e.code)) return;
+  for (let i = events.length - 1; i >= 0; i--)
+    if (events[i].code === e.code && events[i].up === null) { events[i].up = e.timeStamp; break; }
+  if (e.code === "Enter") finalize();
+});
+
+function finalize() {
+  const typed = input.value;
+  const complete = events.filter(ev => ev.up !== null);
+  let feats = null, order = null;
+  if (typed && complete.length === typed.length + 1) {     // + Enter
+    const n = complete.length;
+    feats = [];
+    for (let i = 0; i < n; i++) {
+      feats.push(complete[i].up - complete[i].down);           // hold
+      if (i < n - 1) {
+        feats.push(complete[i + 1].down - complete[i].down);   // DD
+        feats.push(complete[i + 1].down - complete[i].up);     // UD
+      }
+    }
+    order = featureOrder(n);
+  }
+  events = [];
+  input.value = "";
+  bankSample(feats, order, typed);
+}
+
+async function bankSample(feats, order, typed) {
+  if (!feats) { showMsg("cap-msg", "Typing glitch — retype it in one go, no corrections.", false); return; }
+  if (typed !== st.newPhrase) { showMsg("cap-msg", "That didn't match your new phrase — type it exactly.", false); return; }
+  showMsg("cap-msg", "", false);
+
+  st.samples.push(feats);
+  st.order = order;
+  drawDots();
+  if (st.samples.length < REQUIRED) return;
+
+  const r = await fetch("/api/user/password", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ old_phrase: st.oldPhrase, new_phrase: st.newPhrase,
+                           samples: st.samples, feature_order: st.order }),
+  });
+  const out = await r.json();
+  if (!r.ok || !out.ok) {
+    st.samples = [];
+    drawDots();
+    showMsg("cap-msg", out.error || "Could not change the phrase.", false);
+    return;
+  }
+  $("pw-capture").hidden = true;
+  showMsg("pw-done", `Phrase changed. Your profile was rebuilt from ${out.n_samples} samples, ` +
+                     `with an accept threshold of ${out.threshold}.`, true);
+  setTimeout(() => location.reload(), 2600);
+}
+
+// ---- stage switching ------------------------------------------------------
+$("pw-next").addEventListener("click", () => {
+  const oldPhrase = $("old-phrase").value;
+  const newPhrase = $("new-phrase").value;
+  if (!oldPhrase) { showMsg("pw-msg", "Enter your current phrase.", false); return; }
+  const err = phraseError(newPhrase);
+  if (err) { showMsg("pw-msg", err, false); return; }
+  if (newPhrase === oldPhrase) {
+    showMsg("pw-msg", "The new phrase must differ from the current one.", false);
+    return;
+  }
+  showMsg("pw-msg", "", false);
+
+  st.oldPhrase = oldPhrase;
+  st.newPhrase = newPhrase;
+  st.samples = [];
+  $("pw-phrase").textContent = newPhrase;
+  $("pw-form").hidden = true;
+  $("pw-capture").hidden = false;
+  drawDots();
+  input.focus();
+});
+
+$("pw-cancel").addEventListener("click", () => {
+  st.samples = [];
+  events = [];
+  input.value = "";
+  showMsg("cap-msg", "", false);
+  $("pw-capture").hidden = true;
+  $("pw-form").hidden = false;
+});
+</script>
+
+</body>
+</html>

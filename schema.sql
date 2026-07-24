@@ -9,17 +9,23 @@
 PRAGMA foreign_keys = ON;
 
 -- 1. Enrolled demo users (the people who register a typing profile).
+--    password_hash guards the knowledge factor: the hash of the phrase this
+--    user enrolled with (the default phrase unless they chose their own).
 CREATE TABLE IF NOT EXISTS users (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    username   TEXT    NOT NULL UNIQUE,
-    created_at TEXT    NOT NULL
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    username      TEXT    NOT NULL UNIQUE,
+    password_hash TEXT,
+    created_at    TEXT    NOT NULL
 );
 
--- 2. Admin accounts that can view the attempts dashboard.
+-- 2. Admin accounts that can view the attempts dashboard. profile_json holds
+--    the admin's optional keystroke-rhythm profile (second login factor),
+--    serialised exactly like a user profile; NULL until the admin enrolls it.
 CREATE TABLE IF NOT EXISTS admins (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     username      TEXT    NOT NULL UNIQUE,
     password_hash TEXT    NOT NULL,
+    profile_json  TEXT,
     created_at    TEXT    NOT NULL
 );
 
@@ -76,7 +82,9 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE TABLE IF NOT EXISTS admin_actions (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     admin_id   INTEGER,                     -- NULL if that admin was later removed
-    action     TEXT    NOT NULL,            -- 'unlock' | 'delete' | 'ack_intrusion'
+    action     TEXT    NOT NULL,            -- 'unlock' | 'delete' | 'reset' |
+                                            -- 'ack_intrusion' | 'enroll_rhythm' |
+                                            -- 'change_password' | 'reset_rhythm'
     target     TEXT    NOT NULL,            -- username the action applies to
     detail     TEXT,                        -- ack: ISO time of the triggering attempt
     created_at TEXT    NOT NULL,
@@ -85,3 +93,15 @@ CREATE TABLE IF NOT EXISTS admin_actions (
 
 CREATE INDEX IF NOT EXISTS idx_admin_actions_ack
     ON admin_actions (action, target, detail);
+
+-- 8. Demo-user login sessions. Issued when a verification is ACCEPTED (phrase
+--    and rhythm both matched), so the user can view their own profile at /me.
+--    Mirrors `sessions`, but for enrolled users instead of admins.
+CREATE TABLE IF NOT EXISTS user_sessions (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL,
+    token      TEXT    NOT NULL UNIQUE,
+    created_at TEXT    NOT NULL,
+    expires_at TEXT    NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+);

@@ -60,7 +60,14 @@
         </div>
         <div class="actions">
           <button class="btn btn-warn btn-sm" onclick="act('unlock')">Unlock · clear attempts</button>
+          <button class="btn btn-warn btn-sm" onclick="act('reset')">Force re-enrollment</button>
           <button class="btn btn-bad btn-sm" onclick="act('delete')">Delete user</button>
+        </div>
+        <div class="note">
+          <span class="accent">◈</span>
+          <div><strong>Force re-enrollment</strong> keeps the account but drops its profile, samples
+            and sessions, so it cannot authenticate until the user enrols a new phrase and rhythm.
+            Admins never see or set a user's phrase — only the user can rebind it.</div>
         </div>
       </div>
     </div>
@@ -95,9 +102,14 @@
 </div>
 
 <script>
+  const VERB = {
+    delete: "delete this user",
+    reset:  "wipe this user's profile and force them to enroll again",
+    unlock: "clear this user's attempts",
+  };
+
   async function act(kind) {
-    const verb = kind === "delete" ? "delete this user" : "clear this user's attempts";
-    if (!confirm("Are you sure you want to " + verb + "?")) return;
+    if (!confirm("Are you sure you want to " + VERB[kind] + "?")) return;
     const r = await fetch(`/api/admin/user/{{ username }}/${kind}`, { method: "POST" });
     if (r.ok) location.href = kind === "delete" ? "/admin/dashboard" : location.href;
     else alert("Action failed.");
