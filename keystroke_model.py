@@ -39,7 +39,10 @@ __all__ = [
     "DETECTORS",
     "enroll",
     "verify",
+    "tempo_factor",
     "DEFAULT_THRESHOLD_K",
+    "TEMPO_MIN",
+    "TEMPO_MAX",
 ]
 
 # How many standard deviations above the mean genuine (training) score the
@@ -47,6 +50,16 @@ __all__ = [
 # Larger  -> more permissive (fewer legitimate users locked out, more intruders let in).
 # This is a starting heuristic for the live demo; it can be tuned per deployment.
 DEFAULT_THRESHOLD_K = 1.5
+
+# Bounds on the tempo factor (see `tempo_factor`). A genuine user who is tired,
+# unwell or typing one-handed runs slower more or less uniformly, and that is
+# worth forgiving. An arbitrarily large factor is not: without a clamp, the
+# normalisation would rescale ANY sample onto the profile's tempo, so an impostor
+# typing at half or triple speed would be handed the correction for free. These
+# bounds say "up to twice as slow, or twice as fast, is a bad day; beyond that is
+# a different person".
+TEMPO_MIN = 0.5
+TEMPO_MAX = 2.0
 
 
 # ---------------------------------------------------------------------------
@@ -210,7 +223,25 @@ def enroll(samples, feature_order=None, threshold_k=DEFAULT_THRESHOLD_K):
     }
 
 
-def verify(profile, sample, feature_order=None):
+def tempo_factor(sample, mean, lo=TEMPO_MIN, hi=TEMPO_MAX):
+    """How much slower (>1) or faster (<1) this sample runs than the profile.
+
+    The *median* per-feature ratio, not the mean: a median ignores a handful of
+    wild features (one fumbled key, one pause to think) and reports the pace of
+    the sample as a whole. The result is clamped to [lo, hi] -- see TEMPO_MIN.
+
+    Returns 1.0 when the profile carries no usable (strictly positive) mean, so
+    the caller can always divide by the result.
+    """
+    mean = np.asarray(mean, dtype=float)
+    x = np.asarray(sample, dtype=float).ravel()
+    usable = mean > 0
+    if not usable.any():
+        return 1.0
+    return float(np.clip(np.median(x[usable] / mean[usable]), lo, hi))
+
+
+def verify(profile, sample, feature_order=None, tempo_normalise=False):
     """Score a single login attempt against a stored profile.
 
     Parameters
@@ -223,14 +254,30 @@ def verify(profile, sample, feature_order=None):
         If both this and the profile's feature order are given, they must match;
         otherwise a ValueError is raised (guards against feature-order drift
         between enrollment and verification).
+    tempo_normalise : bool
+        Divide the sample by its own tempo factor before scoring, so the decision
+        is made on the *shape* of the rhythm rather than its speed. This is the
+        anomaly-tolerance knob: a genuine user who is unwell, injured or simply
+        tired types the same pattern more slowly, and without this every feature
+        drifts in the same direction at once and the sum crosses the threshold.
+        An impostor who types at the right speed but the wrong pattern is
+        unaffected -- the ratios between features are what identifies a person,
+        and normalising deliberately preserves them.
+
+        It is not free: an impostor whose rhythm happens to be the right SHAPE at
+        the wrong speed is helped too, which is why `tempo_factor` clamps how far
+        the correction can reach. Off by default; the backend turns it on.
 
     Returns
     -------
     dict
-        {score, threshold, accepted, deviations} where `accepted` is True when the
-        sample is close enough to the enrolled profile to be treated as the genuine
-        user. `deviations` is the per-feature |x - mean| / MAD vector the score sums
-        over -- it says *which* timings drifted, not just by how much overall.
+        {score, raw_score, tempo, threshold, accepted, deviations}. `score` is
+        what the decision uses; `raw_score` is the same sum before any tempo
+        correction, and `tempo` is the factor that was divided out (1.0 = the
+        enrolled pace), so the caller can report *why* an attempt was forgiven.
+        Both are equal and tempo is 1.0 when `tempo_normalise` is False.
+        `deviations` is the per-feature |x - mean| / MAD vector `score` sums over
+        -- it says *which* timings drifted, not just by how much overall.
     """
     stored_order = profile.get("feature_order")
     if stored_order is not None and feature_order is not None:
@@ -245,11 +292,21 @@ def verify(profile, sample, feature_order=None):
             f"sample has {x.shape[0]} features, profile expects {mean.shape[0]}"
         )
 
-    deviations = np.abs(x - mean) / mad
+    raw_score = float((np.abs(x - mean) / mad).sum())
+
+    tempo = 1.0
+    if tempo_normalise:
+        tempo = tempo_factor(x, mean)
+
+    # Scored on the tempo-corrected vector, so `deviations` explains the decision
+    # that was actually made rather than one the server did not use.
+    deviations = np.abs(x / tempo - mean) / mad
     score = float(deviations.sum())
     threshold = float(profile["threshold"])
     return {
         "score": score,
+        "raw_score": raw_score,
+        "tempo": tempo,
         "threshold": threshold,
         "accepted": score <= threshold,
         "deviations": deviations.tolist(),

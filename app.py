@@ -88,8 +88,27 @@ ADMIN_RHYTHM_MARGIN = 2.5
 # Decision policy.
 SUSPICIOUS_MARGIN = 1.15       # score in (threshold, threshold*margin] -> "suspicious"
 
+# Anomaly tolerance. A genuine user has bad days -- illness, an injured hand, a
+# borrowed keyboard, plain tiredness -- and the cost of getting that wrong is not
+# symmetric: a locked-out real user is a support ticket and a lost user, while a
+# borderline attempt that is asked to try once more costs an attacker one extra
+# attempt out of a budget the lock is about to end anyway.
+#
+# RETRY_ALLOWANCE is how many times IN A ROW a borderline ("suspicious") attempt
+# is answered with "type it again" instead of counting toward the lock. The run
+# is consecutive and resets on any accept, so it cannot be farmed: an attacker
+# parked in the suspicious band gets RETRY_ALLOWANCE free attempts and every one
+# after that is a strike, which still reaches the lock.
+RETRY_ALLOWANCE = 2
+
+# Score the SHAPE of the rhythm rather than its speed (keystroke_model.verify).
+# This is what covers the sick / injured / tired user directly: they type the
+# same pattern slower, which without this pushes every feature off its mean at
+# once. See keystroke_model.TEMPO_MIN for the bound on how far it can reach.
+TEMPO_NORMALISE = True
+
 # Intrusion detection policy.
-FAIL_LOCK_STREAK = 3           # this many consecutive rejects -> intrusion + lock
+FAIL_LOCK_STREAK = 3           # this many consecutive strikes -> intrusion + lock
 LOCK_COOLDOWN_MIN = 5          # lock duration, measured from the triggering failure
 
 # Rate limiting (per client IP).
@@ -101,6 +120,11 @@ RATE_LIMIT_WINDOW = 60        # ... per this many seconds
 # thousands.
 ADMIN_RATE_LIMIT_MAX = 10
 ADMIN_RATE_LIMIT_WINDOW = 300
+
+# Enrollment is slow for a human -- REQUIRED_SAMPLES typed repetitions -- so a
+# generous human allowance is still a tight machine one.
+ENROLL_RATE_LIMIT_MAX = 10
+ENROLL_RATE_LIMIT_WINDOW = 300
 
 # Only trust X-Forwarded-For when this process really does sit behind a proxy
 # that sets it. Reading the header unconditionally hands every client its own
@@ -195,11 +219,19 @@ def init_db() -> None:
     # nullable columns; add them in place so existing demo data keeps working.
     _ensure_column(con, "users", "password_hash", "TEXT")
     _ensure_column(con, "admins", "profile_json", "TEXT")
+    _ensure_column(con, "attempts", "outcome", "TEXT")
     # Every pre-migration user enrolled with the default phrase, so their
     # knowledge factor is known and can be backfilled.
     con.execute(
         "UPDATE users SET password_hash = ? WHERE password_hash IS NULL",
         (generate_password_hash(PHRASE),),
+    )
+    # Rows logged before `outcome` existed predate the retry allowance, so every
+    # one of their non-accepts really was a strike. Writing that in means the
+    # streak logic never has to special-case a NULL.
+    con.execute(
+        "UPDATE attempts SET outcome = CASE WHEN accepted = 1 THEN 'accept' ELSE 'reject' END "
+        "WHERE outcome IS NULL"
     )
     if con.execute("SELECT 1 FROM admins WHERE username = ?", (ADMIN_USERNAME,)).fetchone() is None:
         con.execute(
@@ -301,46 +333,93 @@ def decision_band(score: float, threshold: float) -> str:
 
 
 def band_of(row) -> str:
-    """The band for a logged attempt row.
+    """The band recorded for a logged attempt row.
 
-    An attempt against an unknown username is logged with no score, and counts
-    as a reject.
+    The stored `outcome` is authoritative, because the band is no longer a pure
+    function of the score: a borderline attempt reads 'suspicious' while the
+    retry allowance holds and 'reject' once it is spent, and both carry the same
+    score. Falling back to the score keeps rows written by an older build (and
+    by seed_demo.py) readable.
     """
+    outcome = row["outcome"] if "outcome" in row.keys() else None
+    if outcome:
+        return outcome
     if row["score"] is None or row["threshold"] is None:
         return "reject"
     return decision_band(row["score"], row["threshold"])
 
 
-# The SQL form of decision_band, so a band filter can be pushed into the query
-# and paginate over the true match count instead of a page-local slice.
-BAND_SQL = {
-    "accept": "accepted = 1",
-    "suspicious": "accepted = 0 AND score IS NOT NULL AND threshold IS NOT NULL "
-                  f"AND score <= threshold * {SUSPICIOUS_MARGIN}",
-    "reject": "accepted = 0 AND (score IS NULL OR threshold IS NULL "
-              f"OR score > threshold * {SUSPICIOUS_MARGIN})",
-}
+# The SQL form of band_of, so a band filter can be pushed into the query and
+# paginate over the true match count instead of a page-local slice. `outcome` is
+# backfilled by init_db(), so COALESCE only ever catches rows inserted by a
+# writer that predates the column.
+def _band_sql(band: str) -> str:
+    legacy = ("CASE WHEN accepted = 1 THEN 'accept' "
+              "WHEN score IS NULL OR threshold IS NULL THEN 'reject' "
+              f"WHEN score <= threshold * {SUSPICIOUS_MARGIN} THEN 'suspicious' "
+              "ELSE 'reject' END")
+    return f"COALESCE(outcome, {legacy}) = '{band}'"
+
+
+BAND_SQL = {band: _band_sql(band) for band in ("accept", "suspicious", "reject")}
+
+# What each recorded outcome does to the lock. A retry ('suspicious') is
+# deliberately neither: it does not add a strike, and it does not clear the
+# strikes already standing. Skipping it rather than resetting is what stops an
+# attacker from parking in the borderline band to wipe their record.
+STRIKE = "reject"
+NEUTRAL = "suspicious"
+
+
+def trailing_outcomes(db, username):
+    """This user's attempt outcomes, newest first, as (band, created_at) pairs."""
+    rows = db.execute(
+        "SELECT accepted, score, threshold, outcome, created_at FROM attempts "
+        "WHERE username = ? ORDER BY id DESC",
+        (username,),
+    ).fetchall()
+    return [(band_of(row), row["created_at"]) for row in rows]
 
 
 def trailing_failure_streak(db, username):
-    """Count consecutive non-accepted attempts back from the latest one.
+    """Count consecutive strikes back from the latest attempt.
 
-    Returns (streak, most_recent_failure_time_iso_or_None).
+    An accept ends the run. A retry is stepped over without ending it and
+    without counting -- see NEUTRAL.
+
+    Returns (streak, most_recent_strike_time_iso_or_None).
     """
-    rows = db.execute(
-        "SELECT accepted, created_at FROM attempts WHERE username = ? ORDER BY id DESC",
-        (username,),
-    ).fetchall()
     streak = 0
     last_fail = None
-    for row in rows:
-        if row["accepted"] == 0:
-            streak += 1
-            if last_fail is None:
-                last_fail = row["created_at"]
-        else:
+    for band, created_at in trailing_outcomes(db, username):
+        if band == "accept":
             break
+        if band == NEUTRAL:
+            continue
+        streak += 1
+        if last_fail is None:
+            last_fail = created_at
     return streak, last_fail
+
+
+def trailing_retry_run(db, username) -> int:
+    """How many retries this user has been served since their last accepted login.
+
+    The allowance is per failing *episode*, and only a success ends an episode.
+    Counting back to the nearest non-retry instead would refresh the budget every
+    time a strike landed, which turns the policy into "one strike per
+    RETRY_ALLOWANCE+1 attempts" forever: an attacker parked in the borderline
+    band would still reach the lock, but at a third of the rate, and a genuine
+    user would never feel the system insist. Stepping over strikes -- rather than
+    stopping at them -- is what makes the budget actually run out.
+    """
+    run = 0
+    for band, _ in trailing_outcomes(db, username):
+        if band == "accept":
+            break
+        if band == NEUTRAL:
+            run += 1
+    return run
 
 
 def lock_status(db, username):
@@ -368,7 +447,8 @@ def lock_states(db, usernames):
     Returns {username: (is_locked, seconds_remaining)}.
     """
     rows = db.execute(
-        "SELECT username, accepted, created_at FROM attempts ORDER BY id DESC"
+        "SELECT username, accepted, score, threshold, outcome, created_at FROM attempts "
+        "ORDER BY id DESC"
     ).fetchall()
 
     streak: dict[str, int] = defaultdict(int)
@@ -378,11 +458,14 @@ def lock_states(db, usernames):
         user = row["username"]
         if user in settled:
             continue
-        if row["accepted"] == 0:
+        band = band_of(row)
+        if band == NEUTRAL:
+            continue                   # a retry neither strikes nor settles
+        if band == "accept":
+            settled.add(user)          # newest attempt walking back was an accept
+        else:
             streak[user] += 1
             last_fail.setdefault(user, row["created_at"])
-        else:
-            settled.add(user)          # newest attempt walking back was an accept
 
     now = datetime.now(timezone.utc)
     states = {}
@@ -409,14 +492,18 @@ def detect_intrusions(db):
     already-acknowledged account never showed up in the feed again.
     """
     rows = db.execute(
-        "SELECT username, accepted, created_at FROM attempts ORDER BY id ASC"
+        "SELECT username, accepted, score, threshold, outcome, created_at FROM attempts "
+        "ORDER BY id ASC"
     ).fetchall()
     running = defaultdict(int)
     raised_at: dict[str, datetime] = {}   # user -> time of their last raised event
     events = []
     for row in rows:
         user = row["username"]
-        if row["accepted"] != 0:
+        band = band_of(row)
+        if band == NEUTRAL:
+            continue                      # a retry is not an intrusion signal
+        if band == "accept":
             running[user] = 0             # a success ends the run and the lock
             raised_at.pop(user, None)
             continue
@@ -682,7 +769,7 @@ def me():
     ).fetchone()
 
     rows = db.execute(
-        "SELECT id, score, threshold, accepted, created_at "
+        "SELECT id, score, threshold, accepted, outcome, created_at "
         "FROM attempts WHERE username = ? ORDER BY id DESC LIMIT 50",
         (username,),
     ).fetchall()
@@ -826,7 +913,7 @@ def admin_dashboard():
     }
 
     rows = db.execute(
-        "SELECT id, username, score, threshold, accepted, created_at "
+        "SELECT id, username, score, threshold, accepted, outcome, created_at "
         "FROM attempts ORDER BY id DESC LIMIT 200"
     ).fetchall()
     attempts = [{**dict(r), "band": band_of(r)} for r in rows]
@@ -933,7 +1020,7 @@ def admin_events():
     page, pages, offset = paginate(request.args.get("page", type=int), total)
 
     rows = db.execute(
-        "SELECT id, username, score, threshold, accepted, created_at FROM attempts "
+        "SELECT id, username, score, threshold, accepted, outcome, created_at FROM attempts "
         f"WHERE {clause} ORDER BY id DESC LIMIT ? OFFSET ?",
         [*params, PAGE_SIZE, offset],
     ).fetchall()
@@ -1027,7 +1114,7 @@ def admin_analytics():
     """
     db = get_db()
     rows = db.execute(
-        "SELECT username, score, threshold, accepted, created_at FROM attempts"
+        "SELECT username, score, threshold, accepted, outcome, created_at FROM attempts"
     ).fetchall()
 
     bands = {"accept": 0, "suspicious": 0, "reject": 0}
@@ -1141,22 +1228,33 @@ def admin_policy():
          "on": FAIL_LOCK_STREAK > 0},
         {"title": "Rate limit verification",
          "desc": f"Cap each client IP at {RATE_LIMIT_MAX} verification calls per "
-                 f"{RATE_LIMIT_WINDOW} seconds, and each admin sign-in at "
-                 f"{ADMIN_RATE_LIMIT_MAX} per {ADMIN_RATE_LIMIT_WINDOW} seconds.",
+                 f"{RATE_LIMIT_WINDOW} seconds, each admin sign-in at "
+                 f"{ADMIN_RATE_LIMIT_MAX} per {ADMIN_RATE_LIMIT_WINDOW} seconds, and each "
+                 f"enrollment at {ENROLL_RATE_LIMIT_MAX} per {ENROLL_RATE_LIMIT_WINDOW} seconds.",
          "on": RATE_LIMIT_MAX > 0},
         {"title": "Re-enrollment clears history",
          "desc": "Rebuilding a profile drops that user's old samples and attempt history, so a "
                  "stale failure streak cannot keep a freshly enrolled account locked.",
          "on": True},
-        {"title": "Re-enrollment proves the phrase",
-         "desc": "Enrolling a username that already has a profile requires the phrase it was "
-                 "enrolled with, so nobody can claim another account or erase its history.",
+        {"title": "Retraining needs a session, not just the phrase",
+         "desc": "Overwriting an enrolled rhythm requires a signed-in session for that account "
+                 "(or an admin) as well as the phrase, and is refused while the account is "
+                 "locked. The phrase alone is one factor -- accepting it here would let anyone "
+                 "who learned it replace the biometric and wipe the account's history.",
          "on": True},
-        {"title": "Suspicious counts as a failure",
-         "desc": f"A flagged attempt is not trusted, so it signs nobody in and it counts toward "
-                 f"the {FAIL_LOCK_STREAK}-strike lock -- {FAIL_LOCK_STREAK} borderline logins in "
-                 f"a row freeze the account just as {FAIL_LOCK_STREAK} outright rejects do.",
-         "on": True},
+        {"title": "Forgive a bad day, then insist",
+         "desc": f"A borderline attempt is answered with a retry rather than a strike, up to "
+                 f"{RETRY_ALLOWANCE} times in a row, so illness, an injured hand or plain "
+                 f"tiredness does not freeze a real account. The run resets on any accept and "
+                 f"every attempt past it is a strike, so the {FAIL_LOCK_STREAK}-strike lock is "
+                 f"still reached -- it just costs an intruder {RETRY_ALLOWANCE} more tries.",
+         "on": RETRY_ALLOWANCE > 0},
+        {"title": "Score the rhythm's shape, not its speed",
+         "desc": "Each attempt is divided by its own tempo before scoring, so typing the same "
+                 "pattern uniformly slower is forgiven while typing a different pattern is not. "
+                 f"The correction is clamped to {keystroke_model.TEMPO_MIN}x-{keystroke_model.TEMPO_MAX}x "
+                 "so it cannot rescale an arbitrary sample onto the profile.",
+         "on": TEMPO_NORMALISE},
         {"title": "Return score detail to the client",
          "desc": "The result screen shows the distance, the threshold and the per-key deviation. "
                  "That is also a hill-climbing oracle, so a real deployment turns it off "
@@ -1180,6 +1278,7 @@ def admin_policy():
         margin_pct=pct(SUSPICIOUS_MARGIN, 1.0, 2.0),
         fail_lock_streak=FAIL_LOCK_STREAK,
         lock_cooldown_min=LOCK_COOLDOWN_MIN,
+        retry_allowance=RETRY_ALLOWANCE,
         toggles=toggles,
     )
 
@@ -1227,7 +1326,7 @@ def admin_account():
 def admin_user(username):
     db = get_db()
     rows = db.execute(
-        "SELECT id, score, threshold, accepted, created_at "
+        "SELECT id, score, threshold, accepted, outcome, created_at "
         "FROM attempts WHERE username = ? ORDER BY id DESC LIMIT 200",
         (username,),
     ).fetchall()
@@ -1293,6 +1392,17 @@ def store_enrollment(db, user_id: int, username: str, samples, feature_order):
 
 @app.post("/api/enroll")
 def api_enroll():
+    # Enrollment writes the biometric factor, so it gets a budget of its own.
+    # Without one this endpoint was an unthrottled oracle: it answers "taken" or
+    # "created" for any name, and it will happily do so thousands of times a
+    # minute. Throttling is the honest mitigation -- any endpoint that creates
+    # accounts by name necessarily reveals which names are free, exactly as a
+    # signup form does, so the goal is to make sweeping the namespace slow rather
+    # than to pretend the distinction can be hidden.
+    if rate_limited(client_ip(), ENROLL_RATE_LIMIT_MAX, ENROLL_RATE_LIMIT_WINDOW, "enroll"):
+        return jsonify(error="too many enrollment attempts, slow down",
+                       retry_after=ENROLL_RATE_LIMIT_WINDOW), 429
+
     data = request.get_json(silent=True) or {}
     username = (data.get("username") or "").strip()
     password = data.get("password") or ""
@@ -1337,26 +1447,47 @@ def api_enroll():
         # Attempts are logged under the stored casing, so the clear-down in
         # store_enrollment has to use it too, not whatever casing was typed.
         username = row["username"]
-        # Re-enrolling an account that already has a profile has to prove the
-        # current phrase. Without this check the endpoint was a complete
-        # takeover: anyone could POST a username they did not own, rebind its
-        # phrase to one they chose, replace the biometric profile, and -- via
-        # store_enrollment -- delete that account's entire attempt history,
-        # destroying the evidence and releasing the lock in the same request.
-        # Re-enrolling the SAME phrase still works, which is the case that
-        # matters: a user retraining a drifted rhythm. Changing the phrase is
-        # /api/user/password's job, and it demands the old phrase too.
+        # Re-enrolling an account that already has a profile overwrites the
+        # biometric factor, so it has to be authorised by more than the phrase.
+        #
+        # Requiring the phrase ALONE (as this did) was still a full takeover for
+        # anyone who had learned it: they could overwrite the rhythm profile with
+        # their own, and -- via store_enrollment -- delete the account's entire
+        # attempt history, releasing the lock and destroying the evidence in the
+        # same request. That collapses two factors back into one, which is the
+        # whole premise of the system. Worse, api_enroll never consulted
+        # lock_status(), so it worked *while the account was locked*: three
+        # rejected attempts, then re-enroll, and the intruder is the owner.
+        #
+        # So a retrain now needs a live session for that same account (proof the
+        # rhythm passed recently) or an admin, AND the phrase, AND an unlocked
+        # account. The genuine case this is meant to serve -- a user whose rhythm
+        # is drifting -- still works: they sign in normally and retrain. A user
+        # already locked out cannot self-serve, by design; that is an admin
+        # reset, the same as any other biometric system's helpdesk path.
         enrolled = db.execute(
             "SELECT 1 FROM profiles WHERE user_id = ?", (user_id,)
         ).fetchone()
         if enrolled is not None:
-            if not row["password_hash"] or not check_password_hash(row["password_hash"], password):
+            is_locked, remaining = lock_status(db, username)
+            if is_locked:
                 return jsonify(
-                    error=f'"{username}" is already enrolled. Re-enrolling it requires the '
-                          f"phrase it was enrolled with; to change that phrase, sign in and "
-                          f"use your profile page, or ask an admin to reset the account.",
+                    error="account temporarily locked -- re-enrollment cannot clear a lock",
+                    locked=True, retry_after=remaining,
+                ), 423
+
+            signed_in = current_user()
+            owner = signed_in is not None and signed_in["user_id"] == user_id
+            if not (owner or current_admin()):
+                return jsonify(
+                    error=f'"{username}" is already enrolled. Retraining its rhythm requires '
+                          f"signing in first, or an admin reset.",
                     username_taken=True,
                 ), 409
+            if not row["password_hash"] or not check_password_hash(row["password_hash"], password):
+                return jsonify(
+                    error="that is not the phrase this account is enrolled with",
+                ), 401
         db.execute(
             "UPDATE users SET password_hash = ? WHERE id = ?",
             (generate_password_hash(password), user_id),
@@ -1435,10 +1566,14 @@ def api_verify():
     if not stored_hash or not check_password_hash(stored_hash, typed):
         if not stored_hash:
             check_password_hash(_DUMMY_HASH, typed)
+        # A wrong phrase is a strike, never a retry: the retry allowance exists to
+        # forgive a rhythm that drifted, and nothing about the typed text drifts.
         db.execute(
-            "INSERT INTO attempts (user_id, username, score, threshold, accepted, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (row["user_id"] if row is not None else None, username, None, None, 0, now_iso()),
+            "INSERT INTO attempts "
+            "(user_id, username, score, threshold, accepted, outcome, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (row["user_id"] if row is not None else None, username,
+             None, None, 0, "reject", now_iso()),
         )
         db.commit()
         streak, _ = trailing_failure_streak(db, username)
@@ -1455,24 +1590,43 @@ def api_verify():
 
     profile = json.loads(row["profile_json"])
     try:
-        result = keystroke_model.verify(profile, sample, feature_order=feature_order)
+        result = keystroke_model.verify(
+            profile, sample, feature_order=feature_order,
+            tempo_normalise=TEMPO_NORMALISE,
+        )
     except (ValueError, TypeError) as exc:
         return jsonify(error=str(exc)), 400
 
     band = decision_band(result["score"], result["threshold"])
+
+    # The retry allowance. A borderline score is answered with "type it again"
+    # rather than a strike, but only while the run of retries is under budget --
+    # otherwise an attacker sitting in the borderline band would never reach the
+    # lock. `retries_left` is read BEFORE this attempt is logged, so it describes
+    # the budget this attempt is spending.
+    retries_left = 0
+    if band == "suspicious":
+        spent = trailing_retry_run(db, username)
+        if spent >= RETRY_ALLOWANCE:
+            band = "reject"          # allowance exhausted: this one counts
+        else:
+            retries_left = RETRY_ALLOWANCE - spent - 1
+
     accepted = band == "accept"
 
     db.execute(
-        "INSERT INTO attempts (user_id, username, score, threshold, accepted, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO attempts "
+        "(user_id, username, score, threshold, accepted, outcome, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
         (row["user_id"], username, result["score"], result["threshold"],
-         int(accepted), now_iso()),
+         int(accepted), band, now_iso()),
     )
     db.commit()
 
-    # Did this attempt just trigger an intrusion lock?
+    # Did this attempt just trigger an intrusion lock? A retry cannot: it is not
+    # a strike, so it never moves the streak.
     streak, _ = trailing_failure_streak(db, username)
-    intrusion = (not accepted) and streak >= FAIL_LOCK_STREAK
+    intrusion = band == "reject" and streak >= FAIL_LOCK_STREAK
 
     payload = dict(
         accepted=accepted,
@@ -1481,6 +1635,7 @@ def api_verify():
         locked=intrusion,
         retry_after=LOCK_COOLDOWN_MIN * 60 if intrusion else 0,
         fail_streak=streak,
+        retries_left=retries_left,
     )
     # The score, the threshold and the per-key deviations are what the result
     # screen draws -- and also a hill-climbing oracle, telling an unauthenticated
@@ -1491,6 +1646,11 @@ def api_verify():
             score=round(result["score"], 3),
             threshold=round(result["threshold"], 3),
             deviations=hold_deviations(profile, result["deviations"]),
+            # 1.0 = the enrolled pace. Reported so the result screen can say
+            # "you typed 1.4x slower than usual" instead of leaving a forgiven
+            # attempt looking unexplained.
+            tempo=round(result["tempo"], 3),
+            raw_score=round(result["raw_score"], 3),
         )
     resp = jsonify(**payload)
     # An accepted verification IS the login: both factors just passed, so the

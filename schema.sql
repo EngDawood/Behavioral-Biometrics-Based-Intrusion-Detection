@@ -54,13 +54,22 @@ CREATE TABLE IF NOT EXISTS profiles (
 
 -- 5. Every verification attempt, logged for the admin dashboard. username is
 --    stored directly so attempts against unknown users are still recorded.
+--
+--    `outcome` records what the server DID, which is no longer a function of the
+--    score alone: a borderline attempt is served as a retry the first few times
+--    and only becomes a strike once the retry allowance is spent. Deriving the
+--    band from score/threshold at read time could not tell those two apart, and
+--    the lock counts strikes -- so the decision is written down at the moment it
+--    is made. NULL means a row written before this column existed; init_db()
+--    backfills those from `accepted`.
 CREATE TABLE IF NOT EXISTS attempts (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id    INTEGER,                     -- NULL if the username was unknown
     username   TEXT    NOT NULL,
     score      REAL,
     threshold  REAL,
-    accepted   INTEGER NOT NULL,            -- 0 = rejected, 1 = accepted
+    accepted   INTEGER NOT NULL,            -- 0 = not signed in, 1 = accepted
+    outcome    TEXT,                        -- 'accept' | 'suspicious' | 'reject'
     created_at TEXT    NOT NULL,
     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE SET NULL
 );

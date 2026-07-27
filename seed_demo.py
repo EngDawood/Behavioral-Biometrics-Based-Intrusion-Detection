@@ -121,21 +121,27 @@ def main():
             (username,),
         ).fetchone()
         profile = json.loads(row["profile_json"])
-        result = km.verify(profile, sample, feature_order=ORDER)
+        # Scored exactly as the live endpoint scores, tempo setting included, so
+        # the seeded history is drawn from the same distribution as real traffic
+        # and the dashboard's bands mean the same thing on both.
+        result = km.verify(profile, sample, feature_order=ORDER,
+                           tempo_normalise=A.TEMPO_NORMALISE)
+        band = A.decision_band(result["score"], result["threshold"])
         cur.execute(
             "INSERT INTO attempts "
-            "(user_id, username, score, threshold, accepted, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "(user_id, username, score, threshold, accepted, outcome, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 row["uid"],
                 username,
                 result["score"],
                 result["threshold"],
-                int(result["accepted"]),
+                int(band == "accept"),
+                band,
                 A.now_iso(),
             ),
         )
-        return result["accepted"]
+        return band == "accept"
 
     genuine_ok = impostor_rejected = total_gen = total_imp = 0
     for user in USERS:

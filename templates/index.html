@@ -452,11 +452,30 @@ async function submitVerify(feats, order, typed) {
 const BAND_UI = {
   accept:     { word:"ACCEPTED",   glyph:"✓", tone:"ok",   chip:"✓ VERIFIED",
                 sub:"Typing rhythm matches the enrolled profile. Access granted." },
-  suspicious: { word:"SUSPICIOUS", glyph:"!", tone:"warn", chip:"! FLAGGED",
-                sub:"Borderline rhythm — just past the threshold. Flagged, not trusted." },
+  suspicious: { word:"TRY AGAIN",  glyph:"↻", tone:"warn", chip:"! BORDERLINE",
+                sub:"Borderline rhythm — just past the threshold. Not signed in, but not "
+                    + "counted against you either. Type the phrase once more." },
   reject:     { word:"REJECTED",   glyph:"✕", tone:"bad",  chip:"✕ BLOCKED",
                 sub:"Rhythm deviates beyond the accepted band — login blocked." },
 };
+
+// A borderline attempt is a retry, not a strike (RETRY_ALLOWANCE in app.py), so
+// the screen has to say what it costs and what is left. Saying "flagged" here
+// while the server quietly forgives it is the kind of mismatch that makes people
+// stop trusting the meter.
+function retrySubtitle(out) {
+  const left = out.retries_left;
+  const tempo = out.tempo;
+  // Only worth mentioning when the tempo correction actually did something.
+  const pace = (tempo && Math.abs(tempo - 1) >= 0.1)
+    ? ` You typed about ${tempo.toFixed(1)}× ${tempo > 1 ? "slower" : "faster"} than usual, `
+      + `which was allowed for.`
+    : "";
+  const budget = left > 0
+    ? ` ${left} more free retr${left === 1 ? "y" : "ies"} before this starts counting.`
+    : " This was the last free retry — the next borderline attempt counts as a strike.";
+  return BAND_UI.suspicious.sub + pace + budget;
+}
 
 function showResult(status, out) {
   const box = $("result-box");
@@ -485,6 +504,9 @@ function showResult(status, out) {
            sub: (out && out.error) || "Verification failed." };
   } else {
     ui = BAND_UI[out.band];
+    if (out.band === "suspicious") {
+      ui = { ...ui, sub: retrySubtitle(out) };
+    }
 
     // A deployment can withhold the score detail (it is a hill-climbing oracle
     // for an attacker), in which case only the band arrives and there is
