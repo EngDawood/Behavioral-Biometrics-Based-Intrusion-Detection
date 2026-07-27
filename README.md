@@ -52,21 +52,40 @@ python seed_demo.py
 ```
 
 Admin dashboard: <http://127.0.0.1:5000/admin> — default login `admin` / `admin123`
-(change `ADMIN_PASSWORD` in `app.py`).
+(change `ADMIN_PASSWORD` in `app/config.py`).
 
 ## Files
 
+`app.py` is only the entry point — it starts the backend and holds no logic. Everything
+lives in the `app/` package, one module per concern.
+
 | File | Role |
 |------|------|
-| `app.py` | Flask routes, decision + intrusion logic, SQLite access, admin auth |
+| `app.py` | Entry point. `python app.py` and nothing else |
+| `app/__init__.py` | The Flask object, its request hooks, route registration |
+| `app/config.py` | Every tunable constant (see **Tuning** below) |
+| `app/db.py` | SQLite connections, schema creation, in-place migrations |
+| `app/validation.py` | Phrase policy and timing-vector validation (pure functions) |
+| `app/ids.py` | Decision bands, failure streaks, locks, intrusion alerts |
+| `app/helpers.py` | Paging, search escaping, per-IP rate limiting |
+| `app/auth.py` | Admin and user sessions, access decorators, audit trail |
+| `app/enrollment.py` | Rebuilding a user's profile (shared by both enroll paths) |
+| `app/views.py` | Public pages, `/me`, user self-service |
+| `app/admin_views.py` | The admin console pages |
+| `app/api.py` | JSON API — enroll, verify, admin login, management |
 | `keystroke_model.py` | Shared matcher (enroll/verify + detectors) — identical to the benchmark's |
-| `schema.sql` | The six tables: users, admins, enrollment_samples, profiles, attempts, sessions |
-| `templates/index.html` | Enroll + verify UI with keystroke capture |
-| `templates/admin.html` | Admin login + monitoring dashboard |
-| `templates/admin_user.html` | Per-user drill-down (history, unlock, delete) |
+| `schema.sql` | The eight tables backing the live demo |
+| `app/templates/index.html` | Enroll + verify UI with keystroke capture |
+| `app/templates/admin.html` | Admin login + monitoring dashboard |
+| `app/templates/admin_user.html` | Per-user drill-down (history, unlock, delete) |
+| `app/static/sentinel.css` | One stylesheet for every page |
 | `seed_demo.py` | Optional: fill the DB with synthetic users + attempts |
 
-## Tuning (top of `app.py`)
+Note that `import app` reaches the **package**, not `app.py` — a package shadows a
+same-named module. `python app.py` still works, because running a script by path does not
+go through the import system.
+
+## Tuning (`app/config.py`)
 
 | Setting | Meaning |
 |---------|---------|
