@@ -23,6 +23,7 @@ import json
 import sqlite3
 
 import numpy as np
+from werkzeug.security import generate_password_hash
 
 import app as A
 import keystroke_model as km
@@ -75,11 +76,14 @@ def main():
 
     signatures = {u: make_signature() for u in USERS}
 
-    # Enroll each synthetic user.
+    # Enroll each synthetic user. The knowledge factor is set here, not left to
+    # init_db()'s backfill: that backfill already ran above, so a NULL hash would
+    # only be filled in on the *next* app start -- and verification crashes on a
+    # NULL hash in the meantime.
     for user in USERS:
         cur.execute(
-            "INSERT INTO users (username, created_at) VALUES (?, ?)",
-            (user, A.now_iso()),
+            "INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)",
+            (user, generate_password_hash(A.PHRASE), A.now_iso()),
         )
         user_id = cur.lastrowid
 

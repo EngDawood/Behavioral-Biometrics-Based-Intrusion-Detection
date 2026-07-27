@@ -4,3 +4,10 @@ temp
 Behavioral-Biometrics-Based-Intrusion-Detection.zip
 demo.db
 docs/
+datasets/description.md
+datasets/mini-datasets/
+datasets/evaluation-script.R
+
+# Claude Code memory bank (local guidance, not part of the deliverable)
+CLAUDE.md
+CLAUDE-*.md

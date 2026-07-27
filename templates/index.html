@@ -422,8 +422,12 @@ async function submitEnroll() {
   });
   const out = await resp.json();
   if (!resp.ok) {
+    // The server rejected the whole batch, so none of it is banked. Put the
+    // counter back to sample 1 as well as the dots -- the title still read
+    // "Type sample 10", which contradicted the reset progress.
     state.samples = [];
     drawDots();
+    $("capture-title").textContent = "Type sample 1";
     showError("capture-err", out.error || "Enrollment failed.");
     return;
   }
@@ -472,24 +476,30 @@ function showResult(status, out) {
     ui = { word:"LOCKED", glyph:"⛔", tone:"bad", chip:"✕ LOCKED",
            sub:`Too many failed attempts. This account is locked for about ` +
                `${Math.ceil((out.retry_after || 0) / 60)} min.` };
-  } else if (status === 404) {
+  } else if (!out || !out.band) {
+    // No band means the server refused before scoring — an unknown username or a
+    // wrong phrase, answered identically so neither can be told apart from here.
+    // That is a rejection, not an error, so it reads as one.
     box.hidden = true;
-    ui = { word:"NO PROFILE", glyph:"?", tone:"warn", chip:"✕ UNKNOWN",
-           sub:`No enrolled profile for "${state.username}". Enroll first, then verify.` };
-  } else if (!out.band) {
-    box.hidden = true;
-    ui = { word:"ERROR", glyph:"✕", tone:"bad", chip:"✕ ERROR",
-           sub: out.error || "Verification failed." };
+    ui = { word:"REJECTED", glyph:"✕", tone:"bad", chip:"✕ BLOCKED",
+           sub: (out && out.error) || "Verification failed." };
   } else {
     ui = BAND_UI[out.band];
+
+    // A deployment can withhold the score detail (it is a hill-climbing oracle
+    // for an attacker), in which case only the band arrives and there is
+    // nothing to plot -- so the meter and the cells are drawn only when the
+    // numbers are actually present.
+    const hasDetail = out.score !== undefined && out.threshold !== undefined;
+    box.hidden = !hasDetail;
 
     // Score meter. The threshold tick is drawn at 83.33% of the bar, so the fill
     // reads as a fraction of the threshold and can overshoot it visibly.
     const fill = $("result-meter");
-    fill.style.width = Math.min(1.2, out.score / out.threshold) * 83.33 + "%";
+    fill.style.width = (hasDetail ? Math.min(1.2, out.score / out.threshold) : 0) * 83.33 + "%";
     fill.className = "meter-fill " + ui.tone;
-    $("result-score").textContent = `distance ${out.score}`;
-    $("result-threshold").textContent = `threshold ${out.threshold}`;
+    $("result-score").textContent = hasDetail ? `distance ${out.score}` : "distance —";
+    $("result-threshold").textContent = hasDetail ? `threshold ${out.threshold}` : "threshold —";
 
     // Per-key deviation: |x - mean| / MAD for each hold feature, scored by the server.
     const cells = $("result-cells");
@@ -503,13 +513,16 @@ function showResult(status, out) {
       slot.appendChild(cell);
       cells.appendChild(slot);
     });
+  }
 
-    if (out.intrusion) {
-      const alert = $("result-alert");
-      alert.hidden = false;
-      alert.textContent =
-        `⚠ Intrusion detected — ${out.fail_streak} consecutive failures. Account locked.`;
-    }
+  // The intrusion banner is not tied to a band: a wrong phrase is refused before
+  // scoring and comes back bandless, yet still carries intrusion/fail_streak. So
+  // this runs on every response shape, not just the scored one.
+  if (out && out.intrusion) {
+    const alert = $("result-alert");
+    alert.hidden = false;
+    alert.textContent =
+      `⚠ Intrusion detected — ${out.fail_streak} consecutive failures. Account locked.`;
   }
 
   $("result-glyph").textContent = ui.glyph;

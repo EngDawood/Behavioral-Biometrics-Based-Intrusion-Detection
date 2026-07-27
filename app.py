@@ -36,6 +36,8 @@ Default admin login: admin / admin123  (change ADMIN_PASSWORD below).
 from __future__ import annotations
 
 import json
+import math
+import os
 import secrets
 import sqlite3
 import time
@@ -90,9 +92,30 @@ SUSPICIOUS_MARGIN = 1.15       # score in (threshold, threshold*margin] -> "susp
 FAIL_LOCK_STREAK = 3           # this many consecutive rejects -> intrusion + lock
 LOCK_COOLDOWN_MIN = 5          # lock duration, measured from the triggering failure
 
-# Rate limiting (per client IP, verification endpoint).
+# Rate limiting (per client IP).
 RATE_LIMIT_MAX = 30            # max verify calls ...
 RATE_LIMIT_WINDOW = 60        # ... per this many seconds
+
+# Admin login is guessed at, not typed at, so it gets a tighter budget than
+# verification: a human operator needs a handful of tries, a script wants
+# thousands.
+ADMIN_RATE_LIMIT_MAX = 10
+ADMIN_RATE_LIMIT_WINDOW = 300
+
+# Only trust X-Forwarded-For when this process really does sit behind a proxy
+# that sets it. Reading the header unconditionally hands every client its own
+# rate-limit bucket -- the limiter then counts nothing.
+TRUST_PROXY = os.environ.get("SENTINEL_TRUST_PROXY") == "1"
+
+# How many client IPs the in-memory limiter will track before it evicts the
+# idle ones. Bounds the memory an attacker can make this process hold.
+RATE_LIMIT_MAX_IPS = 4096
+
+# Whether a verification response carries the score, threshold and per-key
+# deviations. The demo needs them -- they are what the result screen draws --
+# but they also tell an attacker exactly which keystroke to adjust next, so a
+# real deployment sets this False and returns the band alone.
+SHOW_SCORE_DETAIL = os.environ.get("SENTINEL_HIDE_SCORES") != "1"
 
 # Seed admin (demo only -- change before any real deployment).
 ADMIN_USERNAME = "admin"
@@ -101,14 +124,33 @@ ADMIN_PASSWORD = "admin123"
 app = Flask(__name__)
 _rate_log: dict[str, list[float]] = defaultdict(list)  # ip -> recent request times
 
+# Compared against when no real hash is available, so an unknown username costs
+# the same time as a known one (see api_verify).
+_DUMMY_HASH = generate_password_hash(secrets.token_urlsafe(16))
+
 
 # --- database helpers ------------------------------------------------------
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def parse_iso(text: str) -> datetime:
+    """Read a stored timestamp back as an aware UTC datetime.
+
+    Everything this app writes goes through `now_iso()` and is therefore
+    timezone-aware, but a database carried over from an earlier build can hold
+    naive strings. Subtracting a naive datetime from an aware one raises
+    TypeError, which would surface as a 500 from the lock check rather than
+    anywhere near the row that caused it -- so assume UTC when the offset is
+    missing.
+    """
+    stamp = datetime.fromisoformat(text)
+    return stamp if stamp.tzinfo else stamp.replace(tzinfo=timezone.utc)
+
+
 def get_db() -> sqlite3.Connection:
     if "db" not in g:
+        ensure_db()
         g.db = sqlite3.connect(DB_PATH)
         g.db.row_factory = sqlite3.Row
         g.db.execute("PRAGMA foreign_keys = ON")
@@ -129,7 +171,24 @@ def _ensure_column(con, table: str, column: str, decl: str) -> None:
         con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
 
+_schema_ready = False
+
+
+def ensure_db() -> None:
+    """Create the schema on first use if nothing has done so yet.
+
+    `python app.py` calls `init_db()` explicitly, but `flask run`, gunicorn and
+    any other WSGI entry point never execute the `__main__` block -- those
+    deployments used to serve their first request against a database with no
+    tables. Doing it here means the first query always finds a schema, whatever
+    started the process.
+    """
+    if not _schema_ready:
+        init_db()
+
+
 def init_db() -> None:
+    global _schema_ready
     con = sqlite3.connect(DB_PATH)
     con.executescript(SCHEMA_PATH.read_text())
     # Databases created before the phrase / admin-rhythm features miss the two
@@ -147,8 +206,19 @@ def init_db() -> None:
             "INSERT INTO admins (username, password_hash, created_at) VALUES (?, ?, ?)",
             (ADMIN_USERNAME, generate_password_hash(ADMIN_PASSWORD), now_iso()),
         )
+    # Expired session rows are dead weight -- nothing ever deleted them, so both
+    # tables grew without bound across restarts.
+    purge_expired_sessions(con)
     con.commit()
     con.close()
+    _schema_ready = True
+
+
+def purge_expired_sessions(con) -> None:
+    """Drop session rows that can no longer authenticate anyone. Caller commits."""
+    stamp = now_iso()
+    con.execute("DELETE FROM sessions WHERE expires_at < ?", (stamp,))
+    con.execute("DELETE FROM user_sessions WHERE expires_at < ?", (stamp,))
 
 
 # --- phrase policy ----------------------------------------------------------
@@ -175,6 +245,49 @@ def validate_phrase(phrase: str) -> str | None:
     if not any(not c.isalnum() for c in phrase):
         return "phrase must include at least one symbol"
     return None
+
+
+# --- request payload validation --------------------------------------------
+# Timing vectors arrive as JSON from a client we do not control, so they are
+# checked here rather than trusted into numpy. Two failures made this necessary:
+# a sample of the wrong SHAPE (a dict, say) raised TypeError deep inside numpy
+# and escaped as a 500, and a sample of nulls became a vector of NaN that scored
+# NaN, sailed through the comparisons as a "reject", and was serialised into the
+# response as bare `NaN` -- which is not valid JSON.
+
+
+def clean_sample(sample, n_features: int | None = None) -> list[float]:
+    """Coerce one timing vector to a list of finite floats, or raise ValueError."""
+    if not isinstance(sample, (list, tuple)):
+        raise ValueError("sample must be a list of timing numbers")
+    if n_features is not None and len(sample) != n_features:
+        raise ValueError(f"each sample must carry {n_features} timing features")
+    cleaned = []
+    for value in sample:
+        # bool is a subclass of int; True as a timing value is a bug, not a 1.
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError("timing features must be numbers")
+        value = float(value)
+        if not math.isfinite(value):
+            raise ValueError("timing features must be finite numbers")
+        cleaned.append(value)
+    return cleaned
+
+
+def clean_samples(samples, n_features: int, minimum: int) -> list[list[float]]:
+    """Coerce a batch of enrollment vectors, or raise ValueError."""
+    if not isinstance(samples, (list, tuple)) or len(samples) < minimum:
+        raise ValueError(f"need at least {minimum} samples")
+    return [clean_sample(s, n_features) for s in samples]
+
+
+def clean_feature_order(feature_order):
+    """Feature names must be a list of strings, or absent entirely."""
+    if feature_order is None:
+        return None
+    if not isinstance(feature_order, (list, tuple)):
+        raise ValueError("feature_order must be a list of feature names")
+    return [str(name) for name in feature_order]
 
 
 # --- decision + intrusion logic (all derived from `attempts`) --------------
@@ -239,29 +352,96 @@ def lock_status(db, username):
     """
     streak, last_fail = trailing_failure_streak(db, username)
     if streak >= FAIL_LOCK_STREAK and last_fail:
-        elapsed = (datetime.now(timezone.utc) - datetime.fromisoformat(last_fail)).total_seconds()
+        elapsed = (datetime.now(timezone.utc) - parse_iso(last_fail)).total_seconds()
         remaining = LOCK_COOLDOWN_MIN * 60 - elapsed
         if remaining > 0:
             return True, int(remaining)
     return False, 0
 
 
+def lock_states(db, usernames):
+    """Lock state for many users from ONE pass over `attempts`.
+
+    Same rule as `lock_status()`, applied to a whole roster at once. The
+    per-user form issues a query each time it is called, so the users page ran
+    one full scan of `attempts` per row; this walks the log once instead.
+    Returns {username: (is_locked, seconds_remaining)}.
+    """
+    rows = db.execute(
+        "SELECT username, accepted, created_at FROM attempts ORDER BY id DESC"
+    ).fetchall()
+
+    streak: dict[str, int] = defaultdict(int)
+    last_fail: dict[str, str] = {}
+    settled: set[str] = set()          # users whose trailing streak has ended
+    for row in rows:
+        user = row["username"]
+        if user in settled:
+            continue
+        if row["accepted"] == 0:
+            streak[user] += 1
+            last_fail.setdefault(user, row["created_at"])
+        else:
+            settled.add(user)          # newest attempt walking back was an accept
+
+    now = datetime.now(timezone.utc)
+    states = {}
+    for user in usernames:
+        locked, remaining = False, 0
+        if streak.get(user, 0) >= FAIL_LOCK_STREAK and user in last_fail:
+            left = LOCK_COOLDOWN_MIN * 60 - (now - parse_iso(last_fail[user])).total_seconds()
+            if left > 0:
+                locked, remaining = True, int(left)
+        states[user] = (locked, remaining)
+    return states
+
+
 def detect_intrusions(db):
-    """Every point in the log where a user hit FAIL_LOCK_STREAK consecutive fails."""
+    """Every point in the log where a failure run locked an account.
+
+    An event is raised the first time a streak reaches FAIL_LOCK_STREAK, and
+    again whenever a later failure re-locks an account whose previous lock had
+    already lapsed -- which is what `lock_status()` actually does.
+
+    Firing only on `== FAIL_LOCK_STREAK` (as this did) meant a user could raise
+    exactly ONE alert ever: once the streak was past the limit, every further
+    failure re-locked the account in silence, so a sustained attack against an
+    already-acknowledged account never showed up in the feed again.
+    """
     rows = db.execute(
         "SELECT username, accepted, created_at FROM attempts ORDER BY id ASC"
     ).fetchall()
     running = defaultdict(int)
+    raised_at: dict[str, datetime] = {}   # user -> time of their last raised event
     events = []
     for row in rows:
         user = row["username"]
-        if row["accepted"] == 0:
-            running[user] += 1
-            if running[user] == FAIL_LOCK_STREAK:
-                events.append({"username": user, "time": row["created_at"]})
-        else:
-            running[user] = 0
+        if row["accepted"] != 0:
+            running[user] = 0             # a success ends the run and the lock
+            raised_at.pop(user, None)
+            continue
+        running[user] += 1
+        if running[user] < FAIL_LOCK_STREAK:
+            continue
+        when = parse_iso(row["created_at"])
+        previous = raised_at.get(user)
+        if previous is None or (when - previous).total_seconds() >= LOCK_COOLDOWN_MIN * 60:
+            events.append({"username": user, "time": row["created_at"]})
+            raised_at[user] = when
     return events
+
+
+def cached_intrusions(db):
+    """`detect_intrusions` memoised for the life of one request.
+
+    Several things want the event list on a single page render -- the sidebar
+    alert badge, the dashboard counters, the alerts feed -- and each call walks
+    the whole `attempts` table. Nothing writes attempts on those requests, so
+    one pass is enough.
+    """
+    if "intrusions" not in g:
+        g.intrusions = detect_intrusions(db)
+    return g.intrusions
 
 
 def acknowledged_intrusions(db) -> set:
@@ -275,7 +455,7 @@ def acknowledged_intrusions(db) -> set:
 def open_intrusions(db):
     """Intrusion events that have not been acknowledged yet."""
     acked = acknowledged_intrusions(db)
-    return [e for e in detect_intrusions(db) if (e["username"], e["time"]) not in acked]
+    return [e for e in cached_intrusions(db) if (e["username"], e["time"]) not in acked]
 
 
 def log_admin_action(db, action: str, target: str, detail: str | None = None) -> None:
@@ -309,13 +489,50 @@ def like_term(text: str) -> str:
     return f"%{escaped}%"
 
 
-def rate_limited(ip: str) -> bool:
+def client_ip() -> str:
+    """The address to rate-limit this request against.
+
+    `X-Forwarded-For` is a client-supplied header. Reading it unconditionally
+    let a caller name their own bucket -- rotating it gave every request a
+    fresh budget, so the limiter counted nothing at all. It is only consulted
+    when this process is knowingly deployed behind a proxy that sets it, and
+    then only its first entry (the original client; the rest are appended by
+    each hop and are equally forgeable).
+    """
+    if TRUST_PROXY:
+        forwarded = request.headers.get("X-Forwarded-For", "")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+    return request.remote_addr or "unknown"
+
+
+def _evict_idle(now: float) -> None:
+    """Forget IPs with nothing left in their window.
+
+    `_rate_log` is a defaultdict that only ever grew: every distinct address
+    ever seen kept an entry for the life of the process, which an attacker
+    could inflate at will. Sweeping is O(tracked IPs) and only runs when the
+    table is already over budget.
+    """
+    # The longest window in use, so sweeping never hands a slower bucket
+    # (admin login) a fresh budget early.
+    idle_after = max(RATE_LIMIT_WINDOW, ADMIN_RATE_LIMIT_WINDOW)
+    for ip in [ip for ip, seen in _rate_log.items()
+               if not seen or now - seen[-1] >= idle_after]:
+        del _rate_log[ip]
+
+
+def rate_limited(ip: str, max_calls: int = RATE_LIMIT_MAX,
+                 window_secs: int = RATE_LIMIT_WINDOW, bucket: str = "verify") -> bool:
+    """Has this address used up its budget for `bucket` in the last window?"""
     now = time.monotonic()
-    window = _rate_log[ip]
-    window[:] = [t for t in window if now - t < RATE_LIMIT_WINDOW]
-    if len(window) >= RATE_LIMIT_MAX:
+    if len(_rate_log) > RATE_LIMIT_MAX_IPS:
+        _evict_idle(now)
+    seen = _rate_log[f"{bucket}:{ip}"]
+    seen[:] = [t for t in seen if now - t < window_secs]
+    if len(seen) >= max_calls:
         return True
-    window.append(now)
+    seen.append(now)
     return False
 
 
@@ -329,7 +546,7 @@ def current_admin():
         "FROM sessions s JOIN admins a ON a.id = s.admin_id WHERE s.token = ?",
         (token,),
     ).fetchone()
-    if row is None or datetime.fromisoformat(row["expires_at"]) < datetime.now(timezone.utc):
+    if row is None or parse_iso(row["expires_at"]) < datetime.now(timezone.utc):
         return None
     return row
 
@@ -356,7 +573,7 @@ def current_user():
         "FROM user_sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?",
         (token,),
     ).fetchone()
-    if row is None or datetime.fromisoformat(row["expires_at"]) < datetime.now(timezone.utc):
+    if row is None or parse_iso(row["expires_at"]) < datetime.now(timezone.utc):
         return None
     return row
 
@@ -377,6 +594,7 @@ def issue_user_session(db, user_id: int, resp):
     """Attach a fresh user-session cookie to an already-built response."""
     token = secrets.token_urlsafe(32)
     expires = datetime.now(timezone.utc) + timedelta(hours=SESSION_HOURS)
+    purge_expired_sessions(db)
     db.execute(
         "INSERT INTO user_sessions (user_id, token, created_at, expires_at) VALUES (?, ?, ?, ?)",
         (user_id, token, now_iso(), expires.isoformat()),
@@ -524,17 +742,16 @@ def api_user_password():
         return jsonify(error=err), 400
     if new_phrase == old_phrase:
         return jsonify(error="the new phrase must differ from the current one"), 400
-    if not samples or len(samples) < REQUIRED_SAMPLES:
-        return jsonify(error=f"need {REQUIRED_SAMPLES} samples of the new phrase"), 400
-    n_features = expected_features(new_phrase)
-    if any(len(s) != n_features for s in samples):
-        return jsonify(
-            error=f"each sample must carry {n_features} timing features "
-                  f"for a {len(new_phrase)}-character phrase"
-        ), 400
+    try:
+        feature_order = clean_feature_order(feature_order)
+        samples = clean_samples(samples, expected_features(new_phrase), REQUIRED_SAMPLES)
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
 
     try:
-        profile = store_enrollment(db, user["user_id"], samples, feature_order)
+        profile = store_enrollment(
+            db, user["user_id"], user["username"], samples, feature_order
+        )
     except ValueError as exc:
         db.rollback()
         return jsonify(error=str(exc)), 400
@@ -594,14 +811,11 @@ def admin_dashboard():
     total = db.execute("SELECT COUNT(*) c FROM attempts").fetchone()["c"]
     accepted = db.execute("SELECT COUNT(*) c FROM attempts WHERE accepted = 1").fetchone()["c"]
     n_users = db.execute("SELECT COUNT(*) c FROM users").fetchone()["c"]
-    intrusions = detect_intrusions(db)
+    intrusions = cached_intrusions(db)
 
     usernames = [r["username"] for r in db.execute("SELECT username FROM users").fetchall()]
-    locked = []
-    for u in usernames:
-        is_locked, remaining = lock_status(db, u)
-        if is_locked:
-            locked.append({"username": u, "remaining": remaining})
+    states = lock_states(db, usernames)
+    locked = [{"username": u, "remaining": states[u][1]} for u in usernames if states[u][0]]
 
     stats = {
         "users": n_users,
@@ -666,10 +880,13 @@ def admin_users():
         (like_term(q),),
     ).fetchall()
 
-    # Lock state is derived per user, so the status filter runs in Python.
+    # Lock state is derived per user, so the status filter runs in Python. The
+    # whole roster is resolved in one pass -- calling lock_status() per row
+    # rescanned `attempts` once for every user on the page.
+    states = lock_states(db, [r["username"] for r in rows])
     users = []
     for r in rows:
-        is_locked, remaining = lock_status(db, r["username"])
+        is_locked, remaining = states[r["username"]]
         total = r["n_attempts"]
         users.append({
             **dict(r),
@@ -755,9 +972,11 @@ def admin_alerts():
     show = request.args.get("show") or "open"
 
     acked = acknowledged_intrusions(db)
+    raised = cached_intrusions(db)
+    states = lock_states(db, {e["username"] for e in raised})
     events = []
-    for e in reversed(detect_intrusions(db)):
-        is_locked, remaining = lock_status(db, e["username"])
+    for e in reversed(raised):
+        is_locked, remaining = states[e["username"]]
         events.append({
             **e,
             "acked": (e["username"], e["time"]) in acked,
@@ -827,8 +1046,12 @@ def admin_analytics():
     hist = [0] * len(edges)
     for ratio in ratios:
         slot = len(edges) - 1
+        # Bins close on the RIGHT (ratio <= edge), because the decision
+        # boundaries do: `decision_band` accepts at exactly 1.0 and calls
+        # exactly 1.15 suspicious. Closing them on the left put a ratio of
+        # 1.0 -- an accept -- in the bin the chart paints as suspicious.
         for i, hi in enumerate(edges[1:]):
-            if ratio < hi:
+            if ratio <= hi:
                 slot = i
                 break
         hist[slot] += 1
@@ -891,7 +1114,7 @@ def admin_analytics():
         histogram=histogram,
         timeline=timeline,
         risky=risky,
-        intrusions=len(detect_intrusions(db)),
+        intrusions=len(cached_intrusions(db)),
         suspicious_margin=SUSPICIOUS_MARGIN,
     )
 
@@ -918,12 +1141,32 @@ def admin_policy():
          "on": FAIL_LOCK_STREAK > 0},
         {"title": "Rate limit verification",
          "desc": f"Cap each client IP at {RATE_LIMIT_MAX} verification calls per "
-                 f"{RATE_LIMIT_WINDOW} seconds.",
+                 f"{RATE_LIMIT_WINDOW} seconds, and each admin sign-in at "
+                 f"{ADMIN_RATE_LIMIT_MAX} per {ADMIN_RATE_LIMIT_WINDOW} seconds.",
          "on": RATE_LIMIT_MAX > 0},
         {"title": "Re-enrollment clears history",
          "desc": "Rebuilding a profile drops that user's old samples and attempt history, so a "
                  "stale failure streak cannot keep a freshly enrolled account locked.",
          "on": True},
+        {"title": "Re-enrollment proves the phrase",
+         "desc": "Enrolling a username that already has a profile requires the phrase it was "
+                 "enrolled with, so nobody can claim another account or erase its history.",
+         "on": True},
+        {"title": "Suspicious counts as a failure",
+         "desc": f"A flagged attempt is not trusted, so it signs nobody in and it counts toward "
+                 f"the {FAIL_LOCK_STREAK}-strike lock -- {FAIL_LOCK_STREAK} borderline logins in "
+                 f"a row freeze the account just as {FAIL_LOCK_STREAK} outright rejects do.",
+         "on": True},
+        {"title": "Return score detail to the client",
+         "desc": "The result screen shows the distance, the threshold and the per-key deviation. "
+                 "That is also a hill-climbing oracle, so a real deployment turns it off "
+                 "(SENTINEL_HIDE_SCORES=1) and returns the decision band alone.",
+         "on": SHOW_SCORE_DETAIL},
+        {"title": "Trust X-Forwarded-For",
+         "desc": "Off unless this process really sits behind a proxy that sets the header "
+                 "(SENTINEL_TRUST_PROXY=1). Reading it otherwise lets a caller pick their own "
+                 "rate-limit bucket, which defeats the limit entirely.",
+         "on": TRUST_PROXY},
     ]
 
     return render_template(
@@ -1008,7 +1251,7 @@ def admin_user(username):
 
 
 # --- API: enroll -----------------------------------------------------------
-def store_enrollment(db, user_id: int, samples, feature_order):
+def store_enrollment(db, user_id: int, username: str, samples, feature_order):
     """Rebuild a user's enrollment from scratch: samples, profile, lock state.
 
     Shared by first enrollment and by a phrase change, because both have to
@@ -1016,6 +1259,13 @@ def store_enrollment(db, user_id: int, samples, feature_order):
     trained on. The model is fitted before anything is written, so a bad sample
     set raises ValueError while the database is still untouched. The caller owns
     the transaction.
+
+    `username` is required as well as `user_id` because the two identify
+    different rows in `attempts`: an attempt against a name that was not
+    enrolled *yet* is logged with a NULL user_id (there is no user to point at),
+    while every streak is counted by username. Clearing by user_id alone left
+    those rows behind, so three failed attempts before enrolling produced an
+    account that was locked the moment it was created.
     """
     profile = keystroke_model.enroll(samples, feature_order=feature_order)
 
@@ -1033,8 +1283,11 @@ def store_enrollment(db, user_id: int, samples, feature_order):
         (user_id, profile["detector"], json.dumps(profile),
          profile["threshold"], profile["n_samples"], now_iso()),
     )
-    # A fresh enrollment clears any prior failed-attempt streak / lock.
-    db.execute("DELETE FROM attempts WHERE user_id = ?", (user_id,))
+    # A fresh enrollment clears any prior failed-attempt streak / lock, whether
+    # those attempts were logged against the account or against the bare name.
+    db.execute(
+        "DELETE FROM attempts WHERE user_id = ? OR username = ?", (user_id, username)
+    )
     return profile
 
 
@@ -1048,8 +1301,6 @@ def api_enroll():
 
     if not username or not samples:
         return jsonify(error="username and samples are required"), 400
-    if len(samples) < 2:
-        return jsonify(error="need at least 2 samples to enroll"), 400
 
     # The phrase is both the secret and the timing template. No custom phrase
     # means the default one; a custom phrase must pass the policy, and either
@@ -1060,19 +1311,20 @@ def api_enroll():
             return jsonify(error=err), 400
     else:
         password = PHRASE
-    n_features = expected_features(password)
-    if any(len(s) != n_features for s in samples):
-        return jsonify(
-            error=f"each sample must carry {n_features} timing features "
-                  f"for a {len(password)}-character phrase"
-        ), 400
+
+    try:
+        feature_order = clean_feature_order(feature_order)
+        samples = clean_samples(samples, expected_features(password), REQUIRED_SAMPLES)
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
 
     db = get_db()
     # Usernames are matched case-insensitively, so enrolling "dawood" when
     # "Dawood" already exists re-enrolls that same account rather than making a
     # second one. The stored casing is kept as first entered.
     row = db.execute(
-        "SELECT id FROM users WHERE username = ? COLLATE NOCASE", (username,)
+        "SELECT id, username, password_hash FROM users WHERE username = ? COLLATE NOCASE",
+        (username,),
     ).fetchone()
     if row is None:
         cur = db.execute(
@@ -1082,15 +1334,36 @@ def api_enroll():
         user_id = cur.lastrowid
     else:
         user_id = row["id"]
-        # Re-enrollment: rebind the knowledge factor to the phrase actually typed
-        # this time (store_enrollment replaces the samples and the profile).
+        # Attempts are logged under the stored casing, so the clear-down in
+        # store_enrollment has to use it too, not whatever casing was typed.
+        username = row["username"]
+        # Re-enrolling an account that already has a profile has to prove the
+        # current phrase. Without this check the endpoint was a complete
+        # takeover: anyone could POST a username they did not own, rebind its
+        # phrase to one they chose, replace the biometric profile, and -- via
+        # store_enrollment -- delete that account's entire attempt history,
+        # destroying the evidence and releasing the lock in the same request.
+        # Re-enrolling the SAME phrase still works, which is the case that
+        # matters: a user retraining a drifted rhythm. Changing the phrase is
+        # /api/user/password's job, and it demands the old phrase too.
+        enrolled = db.execute(
+            "SELECT 1 FROM profiles WHERE user_id = ?", (user_id,)
+        ).fetchone()
+        if enrolled is not None:
+            if not row["password_hash"] or not check_password_hash(row["password_hash"], password):
+                return jsonify(
+                    error=f'"{username}" is already enrolled. Re-enrolling it requires the '
+                          f"phrase it was enrolled with; to change that phrase, sign in and "
+                          f"use your profile page, or ask an admin to reset the account.",
+                    username_taken=True,
+                ), 409
         db.execute(
             "UPDATE users SET password_hash = ? WHERE id = ?",
             (generate_password_hash(password), user_id),
         )
 
     try:
-        profile = store_enrollment(db, user_id, samples, feature_order)
+        profile = store_enrollment(db, user_id, username, samples, feature_order)
     except ValueError as exc:
         db.rollback()
         return jsonify(error=str(exc)), 400
@@ -1102,8 +1375,7 @@ def api_enroll():
 # --- API: verify -----------------------------------------------------------
 @app.post("/api/verify")
 def api_verify():
-    ip = request.headers.get("X-Forwarded-For", request.remote_addr or "unknown")
-    if rate_limited(ip):
+    if rate_limited(client_ip()):
         return jsonify(error="too many attempts, slow down", retry_after=RATE_LIMIT_WINDOW), 429
 
     data = request.get_json(silent=True) or {}
@@ -1116,6 +1388,14 @@ def api_verify():
         return jsonify(error="username and sample are required"), 400
     if typed is None:
         return jsonify(error="password (the typed phrase) is required"), 400
+
+    # Shape-check before numpy sees it: a malformed vector used to escape as a
+    # 500, and a vector of nulls scored NaN and was serialised as invalid JSON.
+    try:
+        feature_order = clean_feature_order(feature_order)
+        sample = clean_sample(sample)
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
 
     db = get_db()
 
@@ -1141,29 +1421,31 @@ def api_verify():
         (username,),
     ).fetchone()
 
-    if row is None:
-        db.execute(
-            "INSERT INTO attempts (user_id, username, score, threshold, accepted, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (None, username, None, None, 0, now_iso()),
-        )
-        db.commit()
-        return jsonify(error="no profile for that username", accepted=False), 404
-
     # Knowledge factor first: the typed text must match the enrolled phrase
     # before the rhythm is even scored. A wrong phrase is logged as a scoreless
     # reject, so it feeds the same failure-streak / lock policy as a bad rhythm.
-    if not check_password_hash(row["password_hash"], typed):
+    #
+    # An unknown username takes this same path, with the same status and the
+    # same message. Answering it with a distinct 404 ("no profile for that
+    # username") turned the endpoint into a directory: anyone could ask it
+    # which accounts existed. The dummy comparison keeps the timing of the two
+    # cases comparable, so the hash work does not leak what the status no
+    # longer does.
+    stored_hash = row["password_hash"] if row is not None else None
+    if not stored_hash or not check_password_hash(stored_hash, typed):
+        if not stored_hash:
+            check_password_hash(_DUMMY_HASH, typed)
         db.execute(
             "INSERT INTO attempts (user_id, username, score, threshold, accepted, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            (row["user_id"], username, None, None, 0, now_iso()),
+            (row["user_id"] if row is not None else None, username, None, None, 0, now_iso()),
         )
         db.commit()
         streak, _ = trailing_failure_streak(db, username)
         intrusion = streak >= FAIL_LOCK_STREAK
         return jsonify(
-            error="phrase does not match the enrolled one",
+            error="verification failed -- check the username and phrase, and that "
+                  "this account has been enrolled",
             accepted=False,
             intrusion=intrusion,
             locked=intrusion,
@@ -1174,7 +1456,7 @@ def api_verify():
     profile = json.loads(row["profile_json"])
     try:
         result = keystroke_model.verify(profile, sample, feature_order=feature_order)
-    except ValueError as exc:
+    except (ValueError, TypeError) as exc:
         return jsonify(error=str(exc)), 400
 
     band = decision_band(result["score"], result["threshold"])
@@ -1192,17 +1474,25 @@ def api_verify():
     streak, _ = trailing_failure_streak(db, username)
     intrusion = (not accepted) and streak >= FAIL_LOCK_STREAK
 
-    resp = jsonify(
+    payload = dict(
         accepted=accepted,
         band=band,
-        score=round(result["score"], 3),
-        threshold=round(result["threshold"], 3),
-        deviations=hold_deviations(profile, result["deviations"]),
         intrusion=intrusion,
         locked=intrusion,
         retry_after=LOCK_COOLDOWN_MIN * 60 if intrusion else 0,
         fail_streak=streak,
     )
+    # The score, the threshold and the per-key deviations are what the result
+    # screen draws -- and also a hill-climbing oracle, telling an unauthenticated
+    # caller exactly which keystroke to adjust next. The demo keeps them; a real
+    # deployment sets SENTINEL_HIDE_SCORES=1 and returns the band alone.
+    if SHOW_SCORE_DETAIL:
+        payload.update(
+            score=round(result["score"], 3),
+            threshold=round(result["threshold"], 3),
+            deviations=hold_deviations(profile, result["deviations"]),
+        )
+    resp = jsonify(**payload)
     # An accepted verification IS the login: both factors just passed, so the
     # user gets a session and can view their own profile at /me. A suspicious
     # band is flagged, not trusted -- no session.
@@ -1234,6 +1524,7 @@ def issue_admin_session(db, admin_id: int):
     """Create a session row and return the ok-response carrying its cookie."""
     token = secrets.token_urlsafe(32)
     expires = datetime.now(timezone.utc) + timedelta(hours=SESSION_HOURS)
+    purge_expired_sessions(db)
     db.execute(
         "INSERT INTO sessions (admin_id, token, created_at, expires_at) VALUES (?, ?, ?, ?)",
         (admin_id, token, now_iso(), expires.isoformat()),
@@ -1255,6 +1546,14 @@ def api_admin_login():
     threshold. That generous margin -- rather than the bare threshold -- keeps
     a slightly-off day from locking the only admin out of the console.
     """
+    # Password guessing is cheap and this endpoint had no ceiling at all: forty
+    # wrong passwords in a row drew forty plain 401s. The rhythm factor only
+    # helps once a profile exists, so the budget is enforced first, and on a
+    # tighter window than verification gets.
+    if rate_limited(client_ip(), ADMIN_RATE_LIMIT_MAX, ADMIN_RATE_LIMIT_WINDOW, "admin"):
+        return jsonify(error="too many sign-in attempts, slow down",
+                       retry_after=ADMIN_RATE_LIMIT_WINDOW), 429
+
     data = request.get_json(silent=True) or {}
     username = (data.get("username") or "").strip()
     password = data.get("password") or ""
@@ -1276,9 +1575,11 @@ def api_admin_login():
                              "and press Enter, without corrections"), 401
     try:
         result = keystroke_model.verify(
-            json.loads(admin["profile_json"]), sample, feature_order=feature_order
+            json.loads(admin["profile_json"]),
+            clean_sample(sample),
+            feature_order=clean_feature_order(feature_order),
         )
-    except ValueError:
+    except (ValueError, TypeError):
         return jsonify(error="could not read your typing rhythm — retype your "
                              "password cleanly and press Enter"), 401
     if result["score"] > result["threshold"] * ADMIN_RHYTHM_MARGIN:
@@ -1296,6 +1597,12 @@ def api_admin_enroll_rhythm():
     allowed while the admin has no profile -- re-enrollment would let a stolen
     password overwrite the biometric factor.
     """
+    # Guarded by the password, so it is guessable in exactly the same way the
+    # login is -- and it writes the biometric factor, so it gets the same budget.
+    if rate_limited(client_ip(), ADMIN_RATE_LIMIT_MAX, ADMIN_RATE_LIMIT_WINDOW, "admin"):
+        return jsonify(error="too many sign-in attempts, slow down",
+                       retry_after=ADMIN_RATE_LIMIT_WINDOW), 429
+
     data = request.get_json(silent=True) or {}
     username = (data.get("username") or "").strip()
     password = data.get("password") or ""
@@ -1311,13 +1618,9 @@ def api_admin_enroll_rhythm():
     if admin["profile_json"] is not None:
         return jsonify(error="rhythm profile already enrolled"), 409
 
-    if not samples or len(samples) < ADMIN_ENROLL_SAMPLES:
-        return jsonify(error=f"need {ADMIN_ENROLL_SAMPLES} samples"), 400
-    n_features = expected_features(password)
-    if any(len(s) != n_features for s in samples):
-        return jsonify(error="sample does not match the password length"), 400
-
     try:
+        feature_order = clean_feature_order(feature_order)
+        samples = clean_samples(samples, expected_features(password), ADMIN_ENROLL_SAMPLES)
         profile = keystroke_model.enroll(samples, feature_order=feature_order)
     except ValueError as exc:
         return jsonify(error=str(exc)), 400
@@ -1495,4 +1798,12 @@ def api_ack_alert():
 
 if __name__ == "__main__":
     init_db()
-    app.run(debug=True)
+    # Werkzeug's debugger executes arbitrary code from the browser, so it is off
+    # unless it is asked for explicitly (SENTINEL_DEBUG=1) and the bind address
+    # is stated rather than inherited -- leaving `debug=True` in a file people
+    # copy is how a demo becomes a remote shell.
+    app.run(
+        host=os.environ.get("SENTINEL_HOST", "127.0.0.1"),
+        port=int(os.environ.get("SENTINEL_PORT", "5000")),
+        debug=os.environ.get("SENTINEL_DEBUG") == "1",
+    )

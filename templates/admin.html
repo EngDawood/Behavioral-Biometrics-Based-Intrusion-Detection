@@ -59,7 +59,10 @@
 </div>
 
 <script>
-const ENROLL_N = {{ admin_enroll_samples|default(6) }};
+// Fallback must match ADMIN_ENROLL_SAMPLES in app.py, or a page rendered without
+// the variable would collect too few samples and the server would reject the batch.
+// Keep the fallback: an undefined Jinja variable renders empty and breaks the script.
+const ENROLL_N = {{ admin_enroll_samples|default(8) }};
 const $ = (id) => document.getElementById(id);
 
 // Keys that are not part of the typed password and must be ignored.
@@ -184,10 +187,15 @@ async function bankEnrollSample(feats, order, typed) {
 }
 
 // The button covers the click-first habit; a clean sample still needs Enter,
-// and the server will say so when the rhythm check applies.
+// and the server will say so when the rhythm check applies. The field is reset
+// along with the events so the retype starts from a matched state — text left
+// behind with no recorded keystrokes can never satisfy finalize()'s
+// one-event-per-character rule, so every later Enter would fail.
 $("login-btn").addEventListener("click", () => {
+  const password = input.value;   // read before clearing; enroll needs it
   events = [];
-  login(input.value, null, null);
+  input.value = "";               // stale text with no events would fail every later capture
+  login(password, null, null);
 });
 </script>
 

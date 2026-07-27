@@ -95,8 +95,11 @@
                autocorrect="off" autocapitalize="off" spellcheck="false">
 
         <label class="field-label" for="new-phrase">NEW PHRASE</label>
+        <!-- Password managers must keep out: a generated/filled phrase here is text the
+             user never typed, yet it is exactly what they must type REQUIRED times next. -->
         <input id="new-phrase" class="input mono" type="text" autocomplete="off"
-               autocorrect="off" autocapitalize="off" spellcheck="false">
+               autocorrect="off" autocapitalize="off" spellcheck="false"
+               data-lpignore="true" data-1p-ignore data-form-type="other">
 
         <div class="err" id="pw-msg" hidden></div>
         <div class="actions">
@@ -110,8 +113,11 @@
           after each one. Corrections void a sample — retype it in one go.</div>
         <div class="phrase" id="pw-phrase"></div>
         <label class="field-label" for="pw-input">SAMPLE</label>
+        <!-- This is the timed field: autofill fires no keystrokes, so a password manager
+             filling it would defeat the rhythm capture entirely. -->
         <input id="pw-input" class="input mono" type="text" autocomplete="off"
-               autocorrect="off" autocapitalize="off" spellcheck="false">
+               autocorrect="off" autocapitalize="off" spellcheck="false"
+               data-lpignore="true" data-1p-ignore data-form-type="other">
         <div class="dots-wrap">
           <div class="dots" id="pw-dots"></div>
           <div class="dots-text" id="pw-dots-text"></div>
@@ -222,6 +228,10 @@ function drawDots() {
 
 // ---- capture --------------------------------------------------------------
 let events = [];
+// In flight while the change-phrase POST is pending. Enter can fire again before the
+// response lands, and a second POST would carry the already-spent old_phrase — the
+// server would reject it with 401 and the error would contradict the success banner.
+let submitting = false;
 const input = $("pw-input");
 
 input.addEventListener("keydown", (e) => {
@@ -260,6 +270,7 @@ function finalize() {
 }
 
 async function bankSample(feats, order, typed) {
+  if (submitting) return;                                  // the last sample is still being sent
   if (!feats) { showMsg("cap-msg", "Typing glitch — retype it in one go, no corrections.", false); return; }
   if (typed !== st.newPhrase) { showMsg("cap-msg", "That didn't match your new phrase — type it exactly.", false); return; }
   showMsg("cap-msg", "", false);
@@ -269,22 +280,28 @@ async function bankSample(feats, order, typed) {
   drawDots();
   if (st.samples.length < REQUIRED) return;
 
-  const r = await fetch("/api/user/password", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ old_phrase: st.oldPhrase, new_phrase: st.newPhrase,
-                           samples: st.samples, feature_order: st.order }),
-  });
-  const out = await r.json();
-  if (!r.ok || !out.ok) {
-    st.samples = [];
-    drawDots();
-    showMsg("cap-msg", out.error || "Could not change the phrase.", false);
-    return;
+  submitting = true;
+  try {
+    const r = await fetch("/api/user/password", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ old_phrase: st.oldPhrase, new_phrase: st.newPhrase,
+                             samples: st.samples, feature_order: st.order }),
+    });
+    const out = await r.json();
+    if (!r.ok || !out.ok) {
+      st.samples = [];
+      drawDots();
+      showMsg("cap-msg", out.error || "Could not change the phrase.", false);
+      return;
+    }
+    $("pw-capture").hidden = true;
+    showMsg("pw-done", `Phrase changed. Your profile was rebuilt from ${out.n_samples} samples, ` +
+                       `with an accept threshold of ${out.threshold}.`, true);
+    setTimeout(() => location.reload(), 2600);
+  } finally {
+    // Cleared on every path — a dropped connection must not wedge the form for good.
+    submitting = false;
   }
-  $("pw-capture").hidden = true;
-  showMsg("pw-done", `Phrase changed. Your profile was rebuilt from ${out.n_samples} samples, ` +
-                     `with an accept threshold of ${out.threshold}.`, true);
-  setTimeout(() => location.reload(), 2600);
 }
 
 // ---- stage switching ------------------------------------------------------
@@ -313,6 +330,7 @@ $("pw-next").addEventListener("click", () => {
 $("pw-cancel").addEventListener("click", () => {
   st.samples = [];
   events = [];
+  submitting = false;          // cancelling mid-flight must not leave the form dead
   input.value = "";
   showMsg("cap-msg", "", false);
   $("pw-capture").hidden = true;

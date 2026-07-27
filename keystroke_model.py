@@ -160,6 +160,13 @@ def enroll(samples, feature_order=None, threshold_k=DEFAULT_THRESHOLD_K):
     dict
         JSON-serialisable profile: mean vector, MAD vector, decision threshold,
         feature order and sample count. Store this as-is in SQLite.
+
+    Raises
+    ------
+    ValueError
+        If fewer than 2 samples are supplied, or if the samples show no variation
+        at all (identical samples yield a threshold of 0, which would reject the
+        genuine user forever). The backend turns this into an HTTP 400.
     """
     X = np.asarray(samples, dtype=float)
     if X.ndim != 2 or X.shape[0] < 2:
@@ -178,6 +185,18 @@ def enroll(samples, feature_order=None, threshold_k=DEFAULT_THRESHOLD_K):
     for i in range(n):
         rest = np.delete(X, i, axis=0)
         loo_scores[i] = ScaledManhattanDetector().fit(rest).score(X[i])[0]
+
+    # Every leave-one-out score being 0 means the samples carry no variation at
+    # all -- typically a replayed or scripted capture. Such a profile would get a
+    # threshold of 0, and a threshold of 0 can only ever accept a byte-identical
+    # replay: the genuine user, who is never that precise, would be locked out of
+    # their own account forever. Refuse the enrollment instead of storing it.
+    if not loo_scores.any():
+        raise ValueError(
+            "enrollment samples are identical -- type the phrase naturally each "
+            "time so the profile has some variation to learn from"
+        )
+
     threshold = float(loo_scores.mean() + threshold_k * loo_scores.std())
 
     return {

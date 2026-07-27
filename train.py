@@ -21,7 +21,7 @@ exactly the same code.
 
 Usage
 -----
-    python train.py                        # auto-loads or downloads the dataset
+    python train.py                        # loads datasets/, else downloads it there
     python train.py --data path/to.csv     # use a specific local file
     python train.py --save results.csv     # also write per-subject EERs
 
@@ -32,8 +32,8 @@ Euclidean ~17%.
 from __future__ import annotations
 
 import argparse
-import os
 import urllib.request
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -42,10 +42,20 @@ from keystroke_model import DETECTORS
 
 META = ["subject", "sessionIndex", "rep"]
 CMU_URL = "https://www.cs.cmu.edu/~keystroke/DSL-StrongPasswordData.txt"
-LOCAL_CANDIDATES = [
+
+BASE_DIR = Path(__file__).parent
+DATASET_DIR = BASE_DIR / "datasets"
+LOCAL_NAMES = [
     "DSL-StrongPasswordData.txt",
     "DSLStrongPasswordData.csv",
     "DSL-StrongPasswordData.csv",
+]
+# Resolved against the script, not the process CWD, so the benchmark runs from
+# anywhere. The bundled copies under datasets/ win; a copy in the CWD still works.
+LOCAL_CANDIDATES = [
+    directory / name
+    for directory in (DATASET_DIR, BASE_DIR, Path("."))
+    for name in LOCAL_NAMES
 ]
 
 
@@ -53,15 +63,22 @@ LOCAL_CANDIDATES = [
 # Data
 # ---------------------------------------------------------------------------
 def load_dataset(path=None):
-    """Load the CMU dataset from `path`, a known local name, or the CMU site."""
+    """Load the CMU dataset from `path`, the bundled datasets/ copy, or the CMU site.
+
+    An explicit `path` (from --data) wins and is used exactly as given, so it may
+    be relative to the current directory. Otherwise the known filenames are looked
+    up under datasets/, the repo root and the CWD; only if none exists is the file
+    downloaded -- into datasets/, so the next run finds it locally.
+    """
     if path is None:
-        path = next((p for p in LOCAL_CANDIDATES if os.path.exists(p)), None)
+        path = next((p for p in LOCAL_CANDIDATES if p.exists()), None)
     if path is None:
-        path = "DSL-StrongPasswordData.txt"
+        DATASET_DIR.mkdir(parents=True, exist_ok=True)
+        path = DATASET_DIR / "DSL-StrongPasswordData.txt"
         print(f"No local dataset found -- downloading from {CMU_URL}")
         urllib.request.urlretrieve(CMU_URL, path)
 
-    sep = "," if path.endswith(".csv") else r"\s+"
+    sep = "," if str(path).endswith(".csv") else r"\s+"
     df = pd.read_csv(path, sep=sep, engine="python")
     print(f"Loaded {path}: {df.shape[0]} rows, {df.shape[1]} columns")
     return df
