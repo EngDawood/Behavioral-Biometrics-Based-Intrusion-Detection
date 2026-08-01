@@ -28,8 +28,8 @@
     <a class="btn btn-ghost btn-sm" href="/me">My profile</a>
     <a class="btn btn-accent btn-sm" href="/logout">Log out</a>
     {% else %}
-    <a class="quiet" href="/admin">Sign in</a>
-    <a class="btn btn-accent btn-sm" href="#flow">Try it now</a>
+    <a class="quiet" href="/admin">Admin</a>
+    <a class="btn btn-accent btn-sm" href="#flow">Sign up</a>
     {% endif %}
   </div>
 </header>
@@ -45,7 +45,7 @@
         flight timings unique to each person. A silent second factor that layers over any login,
         with nothing new to remember.</p>
       <div class="hero-actions">
-        <a class="btn btn-accent" href="#flow">Start enrollment</a>
+        <a class="btn btn-accent" href="#flow">Sign up</a>
         <a class="btn btn-ghost" href="/admin">Admin dashboard →</a>
       </div>
       <div class="hero-stats">
@@ -83,19 +83,19 @@
   <div class="how-grid">
     <div class="panel">
       <div class="num">1</div>
-      <div class="panel-t">Enroll</div>
+      <div class="panel-t">Type</div>
       <div class="panel-d">Type a short phrase {{ required_samples }} times so Sentinel learns your
         dwell and flight timing.</div>
     </div>
     <div class="panel">
       <div class="num">2</div>
-      <div class="panel-t">Model</div>
-      <div class="panel-d">The server builds a scaled-Manhattan profile of your rhythm — the timing,
-        never the text.</div>
+      <div class="panel-t">Sign up</div>
+      <div class="panel-d">Name the account once the rhythm exists. The server builds a
+        scaled-Manhattan profile from the timing, never the text.</div>
     </div>
     <div class="panel">
       <div class="num">3</div>
-      <div class="panel-t">Verify</div>
+      <div class="panel-t">Log in</div>
       <div class="panel-d">Every login is scored against your profile and decided server-side in
         milliseconds.</div>
     </div>
@@ -121,29 +121,47 @@
 
     <!-- step rail -->
     <div class="rail" id="rail">
-      <div class="rail-seg"><div class="rail-bar"></div><div class="rail-label">Enroll</div></div>
-      <div class="rail-seg"><div class="rail-bar"></div><div class="rail-label">Verify</div></div>
-      <div class="rail-seg"><div class="rail-bar"></div><div class="rail-label">Result</div></div>
+      <div class="rail-seg"><div class="rail-bar"></div><div class="rail-label">Capture</div></div>
+      <div class="rail-seg"><div class="rail-bar"></div><div class="rail-label">Sign up</div></div>
+      <div class="rail-seg"><div class="rail-bar"></div><div class="rail-label">Log in</div></div>
     </div>
 
-    <!-- WELCOME -->
+    <!-- WELCOME — sign-up starts with the phrase, NOT with a name. The phrase has
+         to be chosen first because it is what gets typed, and typing it is what
+         produces the template; the account is named once the rhythm exists. -->
     <div class="step" id="step-welcome">
       <div class="centered">
         <div class="glyph glyph-accent">◈</div>
-        <div class="step-title">Set up keystroke ID</div>
-        <div class="step-sub">We'll learn the rhythm of your typing over {{ required_samples }} short
-          samples. It takes about a minute — no code to memorize.</div>
+        <div class="step-title">Sign up with how you type</div>
+        <div class="step-sub">Pick the phrase you'll sign in with, then type it {{ required_samples }}
+          times so Sentinel learns your rhythm. You name the account at the end — your profile is
+          built from your typing first, and nothing is saved until then.</div>
       </div>
-      <label class="field-label" for="username">Username</label>
-      <input id="username" class="input" placeholder="e.g. alice" autocomplete="off" spellcheck="false">
       <label class="field-label" for="custom-phrase">Secret phrase (optional)</label>
       <input id="custom-phrase" class="input mono" placeholder='leave empty to use "{{ phrase }}"'
              autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
       <div class="alt-line" style="text-align:left;margin-top:6px">{{ phrase_min }}–{{ phrase_max }}
         characters, with at least one number and one symbol.</div>
       <div class="err" id="welcome-err" hidden></div>
-      <button class="btn btn-accent btn-block" id="begin-btn">Begin enrollment</button>
-      <div class="alt-line">Already enrolled? <a href="#" id="skip-verify">Skip to verification</a></div>
+      <button class="btn btn-accent btn-block" id="begin-btn">Start sign-up</button>
+      <div class="alt-line">Already have an account? <a href="#" id="skip-verify">Log in</a></div>
+    </div>
+
+    <!-- LOG IN — the rhythm check is 1:1, so it needs the name of the profile to
+         score against before anything is typed. -->
+    <div class="step" id="step-login" hidden>
+      <div class="centered">
+        <div class="glyph glyph-accent">◈</div>
+        <div class="step-title">Log in</div>
+        <div class="step-sub">Type your phrase once. Sentinel compares its rhythm to the profile
+          saved under this name and decides server-side.</div>
+      </div>
+      <label class="field-label" for="login-username">Username</label>
+      <input id="login-username" class="input" placeholder="e.g. alice" autocomplete="username"
+             spellcheck="false">
+      <div class="err" id="login-err" hidden></div>
+      <button class="btn btn-accent btn-block" id="login-next">Continue</button>
+      <div class="alt-line">No account yet? <a href="#" id="to-signup">Sign up</a></div>
     </div>
 
     <!-- CAPTURE (enroll + verify share this step) -->
@@ -166,13 +184,30 @@
       </div>
     </div>
 
+    <!-- SIGN UP — the identity step, deliberately last: the rhythm is already in
+         hand, and naming the account is what turns it into a stored profile. -->
+    <div class="step" id="step-signup" hidden>
+      <div class="centered">
+        <div class="glyph glyph-ok">✓</div>
+        <div class="step-title">Rhythm captured — name your account</div>
+        <div class="step-sub" id="signup-sub"></div>
+      </div>
+      <label class="field-label" for="username">Username</label>
+      <input id="username" class="input" placeholder="e.g. alice" autocomplete="username"
+             spellcheck="false">
+      <div class="err" id="signup-err" hidden></div>
+      <button class="btn btn-accent btn-block" id="signup-btn">Create my account</button>
+      <div class="alt-line">Your samples stay in this browser until you pick a name — the server is
+        only told about them when the account is created.</div>
+    </div>
+
     <!-- DONE -->
     <div class="step" id="step-done" hidden>
       <div class="centered">
         <div class="glyph glyph-ok">✓</div>
-        <div class="step-title">Profile locked</div>
+        <div class="step-title">You're signed up</div>
         <div class="step-sub" id="done-sub"></div>
-        <button class="btn btn-accent btn-block" id="verify-btn">Try verifying now</button>
+        <button class="btn btn-accent btn-block" id="verify-btn">Log in now</button>
       </div>
     </div>
 
@@ -251,9 +286,12 @@ const $ = (id) => document.getElementById(id);
 // ---- flow state -----------------------------------------------------------
 const state = { step: "welcome", username: "", phrase: null, samples: [], order: null };
 
-const STEP_EL = { welcome:"step-welcome", enroll:"step-capture", verify:"step-capture",
-                  done:"step-done", result:"step-result" };
-const RAIL_IDX = { welcome:0, enroll:0, done:1, verify:1, result:2 };
+const STEP_EL = { welcome:"step-welcome", enroll:"step-capture", signup:"step-signup",
+                  login:"step-login", verify:"step-capture", done:"step-done",
+                  result:"step-result" };
+// Rail: Capture · Sign up · Log in. "signup" is the identity step that follows the
+// capture; "login" is the name asked before a verification.
+const RAIL_IDX = { welcome:0, enroll:0, signup:1, done:1, login:2, verify:2, result:2 };
 
 function render() {
   for (const id of new Set(Object.values(STEP_EL))) $(id).hidden = true;
@@ -265,11 +303,21 @@ function render() {
   });
 
   const chip = $("chip");
-  if (state.step === "welcome")     { chip.className = "chip";            chip.textContent = "SETUP"; }
-  else if (state.step === "enroll") { chip.className = "chip chip-accent"; chip.textContent = "● ENROLLING"; }
-  else if (state.step === "done")   { chip.className = "chip chip-ok";     chip.textContent = "✓ LOCKED"; }
+  if (state.step === "welcome")     { chip.className = "chip";             chip.textContent = "SIGN UP"; }
+  else if (state.step === "enroll") { chip.className = "chip chip-accent"; chip.textContent = "● CAPTURING"; }
+  else if (state.step === "signup") { chip.className = "chip chip-accent"; chip.textContent = "● NAMING"; }
+  else if (state.step === "done")   { chip.className = "chip chip-ok";     chip.textContent = "✓ SIGNED UP"; }
+  else if (state.step === "login")  { chip.className = "chip";             chip.textContent = "LOG IN"; }
   else if (state.step === "verify") { chip.className = "chip chip-ok";     chip.textContent = "● ARMED"; }
   // the result step sets its own chip in showResult()
+
+  if (state.step === "signup") {
+    $("signup-sub").textContent =
+      `${state.samples.length} samples captured. Give the profile a name and Sentinel saves it — ` +
+      `from then on, that name plus your rhythm is the login.`;
+    setTimeout(() => $("username").focus(), 30);
+  }
+  if (state.step === "login") setTimeout(() => $("login-username").focus(), 30);
 
   if (state.step === "enroll" || state.step === "verify") {
     const enrolling = state.step === "enroll";
@@ -407,7 +455,9 @@ attachCapture($("capture-input"), async (feats, order, typed) => {
     state.order = order;
     drawDots();
     clearLive();
-    if (state.samples.length >= REQUIRED) await submitEnroll();
+    // The last sample no longer submits anything: the account has no name yet.
+    // The samples wait in `state` until the sign-up step supplies one.
+    if (state.samples.length >= REQUIRED) { state.step = "signup"; render(); }
     else $("capture-title").textContent = `Type sample ${state.samples.length + 1}`;
   } else if (state.step === "verify") {
     await submitVerify(feats, order, typed);
@@ -415,25 +465,46 @@ attachCapture($("capture-input"), async (feats, order, typed) => {
 });
 
 async function submitEnroll() {
-  const resp = await fetch("/api/enroll", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username: state.username, password: state.phrase,
-                           samples: state.samples, feature_order: state.order }),
-  });
-  const out = await resp.json();
+  const btn = $("signup-btn");
+  btn.disabled = true;
+  let resp, out;
+  try {
+    resp = await fetch("/api/enroll", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: state.username, password: state.phrase,
+                             samples: state.samples, feature_order: state.order }),
+    });
+    out = await resp.json();
+  } catch (e) {
+    showError("signup-err", "Could not reach the server — try again.");
+    return;
+  } finally {
+    btn.disabled = false;
+  }
   if (!resp.ok) {
-    // The server rejected the whole batch, so none of it is banked. Put the
-    // counter back to sample 1 as well as the dots -- the title still read
-    // "Type sample 10", which contradicted the reset progress.
-    state.samples = [];
-    drawDots();
-    $("capture-title").textContent = "Type sample 1";
-    showError("capture-err", out.error || "Enrollment failed.");
+    // Asking for the name LAST means a name that is taken, locked or throttled
+    // would otherwise cost five retyped samples. It doesn't: only a 400 is about
+    // the samples themselves (phrase policy, feature count, sample count), and
+    // only that sends the user back to the capture. Every other refusal is about
+    // the name, so the samples stay in `state` and just the name is retyped.
+    if (resp.status === 400) {
+      state.samples = [];
+      state.step = "enroll";
+      render();
+      showError("capture-err", out.error || "Enrollment failed.");
+    } else {
+      showError("signup-err", out.error || "Sign-up failed.");
+    }
     return;
   }
+  // The server owns the canonical casing of the name ("Alice" wins over "alice"),
+  // and the verify step scores against it, so adopt what came back.
+  state.username = out.username;
+  state.samples = [];
+  showError("signup-err", "");
   $("done-sub").textContent =
-    `"${state.username}" is enrolled from ${out.n_samples} samples, with an accept threshold of ` +
-    `${out.threshold}. From now on, Sentinel checks every login silently.`;
+    `"${out.username}" is signed up from ${out.n_samples} samples, with an accept threshold of ` +
+    `${out.threshold}. Logging in means typing the phrase — Sentinel checks the rhythm silently.`;
   state.step = "done";
   render();
 }
@@ -450,8 +521,8 @@ async function submitVerify(feats, order, typed) {
 // ---- result ---------------------------------------------------------------
 // The server owns the decision; this only renders the band it returns.
 const BAND_UI = {
-  accept:     { word:"ACCEPTED",   glyph:"✓", tone:"ok",   chip:"✓ VERIFIED",
-                sub:"Typing rhythm matches the enrolled profile. Access granted." },
+  accept:     { word:"SIGNED IN",  glyph:"✓", tone:"ok",   chip:"✓ SIGNED IN",
+                sub:"Typing rhythm matches the enrolled profile. You're signed in." },
   suspicious: { word:"TRY AGAIN",  glyph:"↻", tone:"warn", chip:"! BORDERLINE",
                 sub:"Borderline rhythm — just past the threshold. Not signed in, but not "
                     + "counted against you either. Type the phrase once more." },
@@ -482,8 +553,13 @@ function showResult(status, out) {
   $("result-alert").hidden = true;
   box.hidden = false;
   // An accepted verification signed the user in (session cookie set by the
-  // server), so the door to their own profile opens.
-  $("profile-btn").hidden = !(status === 200 && out && out.band === "accept");
+  // server), so the door to their own profile opens -- and becomes the primary
+  // action. Ending on "Verify again" made a real login read as a score demo.
+  const accepted = status === 200 && out && out.band === "accept";
+  $("profile-btn").hidden = !accepted;
+  if (accepted) $("profile-btn").textContent = `Continue as ${state.username} →`;
+  $("again-btn").className = accepted ? "btn btn-ghost" : "btn btn-accent";
+  $("again-btn").textContent = accepted ? "Log in again" : "Try again";
 
   let ui;
   if (status === 429) {
@@ -506,6 +582,9 @@ function showResult(status, out) {
     ui = BAND_UI[out.band];
     if (out.band === "suspicious") {
       ui = { ...ui, sub: retrySubtitle(out) };
+    } else if (out.band === "accept") {
+      ui = { ...ui, sub: `Typing rhythm matches the profile saved for "${state.username}" — ` +
+                         `you're signed in, on the rhythm alone.` };
     }
 
     // A deployment can withhold the score detail (it is a hill-climbing oracle
@@ -560,33 +639,54 @@ function showResult(status, out) {
 }
 
 // ---- controls -------------------------------------------------------------
-function readUsername() {
-  const name = $("username").value.trim();
-  if (!name) { showError("welcome-err", "Enter a username first."); return null; }
-  showError("welcome-err", "");
+function readUsername(inputId, errId) {
+  const name = $(inputId).value.trim();
+  if (!name) { showError(errId, "Enter a username first."); return null; }
+  showError(errId, "");
   return name;
 }
 
+// Sign-up step 1: choose the phrase. No name is asked here -- it comes after the
+// samples, so the profile is built from typing before an identity is attached.
 $("begin-btn").addEventListener("click", () => {
-  const name = readUsername();
-  if (!name) return;
   const custom = $("custom-phrase").value;
   if (custom) {
     const err = phraseError(custom);
     if (err) { showError("welcome-err", err); return; }
   }
+  showError("welcome-err", "");
   state.phrase = custom || PHRASE;
-  state.username = name;
+  state.username = "";
   state.samples = [];
   state.step = "enroll";
   render();
 });
 
-// Verifying an already-enrolled user does not need a fresh enrollment first.
-// Their phrase is a secret checked server-side, so it is not asked for here.
+// Sign-up step 3: the name. This is what finally sends the batch.
+$("signup-btn").addEventListener("click", () => {
+  const name = readUsername("username", "signup-err");
+  if (!name) return;
+  state.username = name;
+  submitEnroll();
+});
+
+// Logging in as an already-enrolled user needs the name up front: the rhythm
+// check is 1:1, so there has to be a profile to score against. The phrase is a
+// secret checked server-side, so it is not asked for here.
 $("skip-verify").addEventListener("click", (e) => {
   e.preventDefault();
-  const name = readUsername();
+  state.step = "login";
+  render();
+});
+
+$("to-signup").addEventListener("click", (e) => {
+  e.preventDefault();
+  state.step = "welcome";
+  render();
+});
+
+$("login-next").addEventListener("click", () => {
+  const name = readUsername("login-username", "login-err");
   if (!name) return;
   state.username = name;
   state.phrase = null;
@@ -595,7 +695,10 @@ $("skip-verify").addEventListener("click", (e) => {
 });
 
 $("username").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") { e.preventDefault(); $("begin-btn").click(); }
+  if (e.key === "Enter") { e.preventDefault(); $("signup-btn").click(); }
+});
+$("login-username").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); $("login-next").click(); }
 });
 
 const toVerify = () => { state.step = "verify"; render(); };
@@ -604,11 +707,14 @@ $("again-btn").addEventListener("click", toVerify);
 
 function restart() {
   state.step = "welcome";
+  state.username = "";
   state.phrase = null;
   state.samples = [];
   state.order = null;
   showError("capture-err", "");
   showError("welcome-err", "");
+  showError("signup-err", "");
+  showError("login-err", "");
   clearLive();
   render();
 }
