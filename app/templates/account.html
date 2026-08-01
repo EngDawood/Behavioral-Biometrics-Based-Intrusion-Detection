@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+{% from "_pw_eye.html" import pw_eye, pw_eye_script %}<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -62,13 +62,22 @@
       <div class="box-body">
         <div class="form">
           <label class="field-label" for="old-pw">CURRENT PASSWORD</label>
-          <input id="old-pw" class="input" type="password" autocomplete="current-password">
+          <div class="pw-field">
+            <input id="old-pw" class="input" type="password" autocomplete="current-password">
+            {{ pw_eye("old-pw") }}
+          </div>
 
           <label class="field-label" for="new-pw">NEW PASSWORD</label>
-          <input id="new-pw" class="input" type="password" autocomplete="new-password">
+          <div class="pw-field">
+            <input id="new-pw" class="input" type="password" autocomplete="new-password">
+            {{ pw_eye("new-pw") }}
+          </div>
 
           <label class="field-label" for="new-pw2">CONFIRM NEW PASSWORD</label>
-          <input id="new-pw2" class="input" type="password" autocomplete="new-password">
+          <div class="pw-field">
+            <input id="new-pw2" class="input" type="password" autocomplete="new-password">
+            {{ pw_eye("new-pw2") }}
+          </div>
 
           <div class="err" id="pw-msg" hidden></div>
           <div class="actions">
@@ -99,7 +108,10 @@
             the enrollment this re-opens.</div>
 
           <label class="field-label" for="reset-pw">PASSWORD</label>
-          <input id="reset-pw" class="input" type="password" autocomplete="current-password">
+          <div class="pw-field">
+            <input id="reset-pw" class="input" type="password" autocomplete="current-password">
+            {{ pw_eye("reset-pw") }}
+          </div>
 
           <div class="err" id="rr-msg" hidden></div>
           <div class="actions">
@@ -200,6 +212,7 @@ if (rrBtn) rrBtn.addEventListener("click", async () => {
   location.href = "/admin";
 });
 </script>
+{{ pw_eye_script() }}
 
 </body>
 </html>

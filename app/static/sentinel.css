@@ -134,6 +134,35 @@ h1, h2, h3 { font-family: var(--display); letter-spacing: -.02em; }
   border-color: var(--accent);
   box-shadow: 0 0 0 3px oklch(0.55 0.12 210 / 0.28);
 }
+/* Password field + its reveal toggle. The eye sits inside the input, so the
+   input has to reserve room on the right for it. */
+.pw-field { position: relative; }
+.pw-field .input { padding-right: 46px; }
+.pw-eye {
+  position: absolute;
+  top: 50%;
+  right: 7px;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  color: var(--ink-3);
+  background: none;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.pw-eye:hover { color: var(--ink); background: oklch(0.34 0.03 260 / 0.4); }
+.pw-eye:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.pw-eye.on { color: var(--accent); }
+.pw-eye svg { width: 18px; height: 18px; display: block; }
+.pw-eye .eye-off { display: none; }
+.pw-eye.on .eye-on  { display: none; }
+.pw-eye.on .eye-off { display: block; }
+
 .field-label {
   display: block;
   font: 500 11px var(--mono);

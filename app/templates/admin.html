@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+{% from "_pw_eye.html" import pw_eye, pw_eye_script %}<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -38,9 +38,12 @@
     <label class="field-label" for="p">Password</label>
     <!-- new-password + no name stops the browser autofilling a saved password;
          autofill fires no keystrokes, so it would also defeat the rhythm check. -->
-    <input id="p" class="input" type="password" autocomplete="new-password"
-           autocorrect="off" autocapitalize="off" spellcheck="false"
-           data-lpignore="true" data-1p-ignore data-form-type="other">
+    <div class="pw-field">
+      <input id="p" class="input" type="password" autocomplete="new-password"
+             autocorrect="off" autocapitalize="off" spellcheck="false"
+             data-lpignore="true" data-1p-ignore data-form-type="other">
+      {{ pw_eye("p") }}
+    </div>
 
     <div class="dots-wrap" id="rhythm-dots-wrap" hidden>
       <div class="dots" id="rhythm-dots"></div>
@@ -198,6 +201,7 @@ $("login-btn").addEventListener("click", () => {
   login(password, null, null);
 });
 </script>
+{{ pw_eye_script() }}
 
 {% else %}
 <!-- ===================================================== DASHBOARD -->

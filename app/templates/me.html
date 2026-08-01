@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+{% from "_pw_eye.html" import pw_eye, pw_eye_script %}<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -91,8 +91,11 @@
           {{ required_samples }} times. Nothing changes until the last sample lands.</div>
 
         <label class="field-label" for="old-phrase">CURRENT PHRASE</label>
-        <input id="old-phrase" class="input mono" type="password" autocomplete="current-password"
-               autocorrect="off" autocapitalize="off" spellcheck="false">
+        <div class="pw-field">
+          <input id="old-phrase" class="input mono" type="password" autocomplete="current-password"
+                 autocorrect="off" autocapitalize="off" spellcheck="false">
+          {{ pw_eye("old-phrase") }}
+        </div>
 
         <label class="field-label" for="new-phrase">NEW PHRASE</label>
         <!-- Password managers must keep out: a generated/filled phrase here is text the
@@ -337,6 +340,7 @@ $("pw-cancel").addEventListener("click", () => {
   $("pw-form").hidden = false;
 });
 </script>
+{{ pw_eye_script() }}
 
 </body>
 </html>
