@@ -1,0 +1,200 @@
+{
+  // Sentinel -- Behavioral Biometrics-Based Intrusion Detection.
+  // Open with:  File > Open Workspace from File...  (or double-click this file)
+  //
+  // The repo runs in two deliberately separate modes and this workspace keeps
+  // both one keypress away:
+  //   * live browser demo   -> app.py (Flask) + demo.db
+  //   * offline benchmark   -> train.py / keystroke_benchmark.ipynb + datasets/
+  "folders": [
+    {
+      "name": "Sentinel",
+      "path": "."
+    }
+  ],
+
+  "settings": {
+    // The venv lives at .venv/ on this Windows box; point the Python extension
+    // straight at it so the integrated terminal and the debugger agree.
+    "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
+    "python.terminal.activateEnvironment": true,
+    "python.analysis.extraPaths": ["${workspaceFolder}"],
+    "python.analysis.typeCheckingMode": "basic",
+
+    // demo.db is a binary artefact rebuilt by init_db(); .venv and __pycache__
+    // are noise. Hidden from the tree, and kept out of search results.
+    "files.exclude": {
+      "**/__pycache__": true,
+      "**/*.pyc": true,
+      ".venv": true
+    },
+    "search.exclude": {
+      "**/__pycache__": true,
+      ".venv": true,
+      "datasets": true,
+      "docs": true,
+      "figures": true,
+      "**/*.db": true,
+      "keystroke_benchmark.ipynb": true
+    },
+    "files.watcherExclude": {
+      "**/.venv/**": true,
+      "**/__pycache__/**": true,
+      "**/datasets/**": true
+    },
+
+    // The 14 Jinja templates are plain .html files -- Emmet and HTML tooling
+    // still work, and {{ }} is left alone.
+    "emmet.includeLanguages": {
+      "jinja-html": "html"
+    },
+    "[python]": {
+      "editor.rulers": [88],
+      "editor.tabSize": 4,
+      "editor.insertSpaces": true
+    },
+    "[html]": {
+      "editor.tabSize": 2
+    },
+    "[css]": {
+      "editor.tabSize": 2
+    },
+    "[sql]": {
+      "editor.tabSize": 2
+    },
+    "files.trimTrailingWhitespace": true,
+    "files.insertFinalNewline": true,
+    "files.eol": "\n",
+
+    // Jupyter: the benchmark notebook must run against the same venv as train.py,
+    // or the two report different numbers for the same detector.
+    "jupyter.notebookFileRoot": "${workspaceFolder}"
+  },
+
+  "launch": {
+    "version": "0.2.0",
+    "configurations": [
+      {
+        // Normal way to run the demo -> http://127.0.0.1:5000
+        // Werkzeug's own debugger stays OFF (it executes arbitrary code from the
+        // browser); VS Code's debugger gives you breakpoints instead.
+        "name": "Flask demo (app.py)",
+        "type": "debugpy",
+        "request": "launch",
+        "program": "${workspaceFolder}/app.py",
+        "cwd": "${workspaceFolder}",
+        "console": "integratedTerminal",
+        "justMyCode": false,
+        "jinja": true,
+        "env": {
+          "SENTINEL_HOST": "127.0.0.1",
+          "SENTINEL_PORT": "5000"
+        }
+      },
+      {
+        // Same thing with Werkzeug's interactive debugger and reloader on.
+        // Local-only, and never for anything reachable off this machine.
+        "name": "Flask demo (Werkzeug debug + reloader)",
+        "type": "debugpy",
+        "request": "launch",
+        "program": "${workspaceFolder}/app.py",
+        "cwd": "${workspaceFolder}",
+        "console": "integratedTerminal",
+        "jinja": true,
+        "env": {
+          "SENTINEL_HOST": "127.0.0.1",
+          "SENTINEL_PORT": "5000",
+          "SENTINEL_DEBUG": "1"
+        }
+      },
+      {
+        // Offline CMU benchmark across the 4 detectors.
+        // Expect Scaled Manhattan ~9.6% mean EER.
+        "name": "Offline benchmark (train.py)",
+        "type": "debugpy",
+        "request": "launch",
+        "program": "${workspaceFolder}/train.py",
+        "cwd": "${workspaceFolder}",
+        "console": "integratedTerminal",
+        "justMyCode": false
+      },
+      {
+        "name": "Offline benchmark -- save per-subject EERs",
+        "type": "debugpy",
+        "request": "launch",
+        "program": "${workspaceFolder}/train.py",
+        "cwd": "${workspaceFolder}",
+        "console": "integratedTerminal",
+        "args": ["--save", "reports/eer_per_subject.csv"]
+      },
+      {
+        // DESTRUCTIVE: seed_demo.py deletes demo.db before repopulating it.
+        // Never run this just to check that seeding works.
+        "name": "Seed demo data (DELETES demo.db)",
+        "type": "debugpy",
+        "request": "launch",
+        "program": "${workspaceFolder}/seed_demo.py",
+        "cwd": "${workspaceFolder}",
+        "console": "integratedTerminal"
+      },
+      {
+        "name": "Python: current file",
+        "type": "debugpy",
+        "request": "launch",
+        "program": "${file}",
+        "cwd": "${workspaceFolder}",
+        "console": "integratedTerminal"
+      }
+    ]
+  },
+
+  "tasks": {
+    "version": "2.0.0",
+    "tasks": [
+      {
+        "label": "Run Flask demo",
+        "type": "shell",
+        "command": "${workspaceFolder}/.venv/Scripts/python.exe app.py",
+        "options": { "cwd": "${workspaceFolder}" },
+        "problemMatcher": [],
+        "isBackground": true,
+        "group": "build",
+        "presentation": { "panel": "dedicated", "clear": true }
+      },
+      {
+        "label": "Install dependencies",
+        "type": "shell",
+        "command": "${workspaceFolder}/.venv/Scripts/python.exe -m pip install -r requirements.txt",
+        "options": { "cwd": "${workspaceFolder}" },
+        "problemMatcher": []
+      },
+      {
+        "label": "Offline benchmark (train.py)",
+        "type": "shell",
+        "command": "${workspaceFolder}/.venv/Scripts/python.exe train.py",
+        "options": { "cwd": "${workspaceFolder}" },
+        "problemMatcher": [],
+        "group": "test",
+        "presentation": { "panel": "dedicated" }
+      },
+      {
+        "label": "Seed demo data (DELETES demo.db)",
+        "type": "shell",
+        "command": "${workspaceFolder}/.venv/Scripts/python.exe seed_demo.py",
+        "options": { "cwd": "${workspaceFolder}" },
+        "problemMatcher": []
+      }
+    ]
+  },
+
+  "extensions": {
+    "recommendations": [
+      "ms-python.python",
+      "ms-python.vscode-pylance",
+      "ms-python.debugpy",
+      "ms-toolsai.jupyter",
+      "samuelcolvin.jinjahtml",
+      "qwtel.sqlite-viewer"
+    ]
+  }
+}
