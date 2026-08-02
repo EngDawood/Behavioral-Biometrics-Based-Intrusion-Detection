@@ -36,6 +36,16 @@ SESSION_HOURS = 8              # admin session lifetime
 PHRASE_MIN = 10
 PHRASE_MAX = 20
 
+# The master switch for the admin's keystroke second factor. Turning it off
+# costs the console its biometric factor outright: /admin becomes password-only,
+# and a stolen or guessed admin password is then the whole of the defence -- the
+# exact attack the rhythm check exists to answer. It is here for the demo, where
+# a projector, an unfamiliar keyboard or a nervous presenter can make a rehearsed
+# rhythm fail in front of an audience, and for recovering a console whose only
+# admin can no longer reproduce their own typing. Enrolled profiles are left
+# untouched while it is off, so flipping it back restores the factor as it was.
+ADMIN_RHYTHM_REQUIRED = True
+
 # Admin keystroke second factor: enrollment repetitions for the admin's rhythm
 # profile (fewer than user enrollment -- login friction matters more here).
 ADMIN_ENROLL_SAMPLES = 8

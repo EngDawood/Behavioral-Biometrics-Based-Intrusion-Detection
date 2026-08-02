@@ -129,6 +129,18 @@ h1, h2, h3 { font-family: var(--display); letter-spacing: -.02em; }
   border-radius: 11px;
 }
 .input.mono { font-family: var(--mono); }
+/* Secret fields are masked TEXT inputs, never type="password". Browsers bind
+   their password manager to the type, and every one of its three behaviours is
+   hostile here: it offers to generate a password the admin then cannot type
+   back during enrollment, it offers to save one, and it autofills -- and an
+   autofilled value arrives with no keydown/keyup at all, so the rhythm capture
+   records nothing. Masking in CSS keeps the field looking like a password box
+   while leaving the manager with nothing to attach to. Chrome, Edge and Safari
+   have always shipped the prefixed property; Firefox since 116. If it is ever
+   unsupported the field degrades to visible text, so never remove the reveal
+   toggle on the assumption that masking is doing the hiding.
+   Toggled by _pw_eye.html, which adds and removes this class. */
+.input.masked { -webkit-text-security: disc; }
 .input:focus {
   outline: none;
   border-color: var(--accent);

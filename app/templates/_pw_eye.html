@@ -1,16 +1,23 @@
-{# Reveal ("eye") toggle for a password field.
+{# Reveal ("eye") toggle for a secret field.
 
-   Wrap the input in a <div class="pw-field"> and call pw_eye() with the input's
-   id right after it:
+   The field is a masked TEXT input, not type="password" — see .input.masked in
+   sentinel.css for why. Wrap it in a <div class="pw-field"> and call pw_eye()
+   with the input's id right after it:
 
      <div class="pw-field">
-       <input id="old-pw" class="input" type="password">
+       <input id="old-pw" class="input masked" type="text" autocomplete="off"
+              autocorrect="off" autocapitalize="off" spellcheck="false"
+              data-lpignore="true" data-1p-ignore data-form-type="other">
        {{ pw_eye("old-pw") }}
      </div>
 
    Then call pw_eye_script() once per page, below the markup — it binds every
    eye on the page. Both macros live here so the icon and the toggle behaviour
-   are written once for the six password fields across the templates. #}
+   are written once for the six secret fields across the templates.
+
+   Because the mask is a class and not the input's type, this is now the only
+   thing standing between the value and the screen: a field that loses the
+   `masked` class is in the clear. #}
 
 {% macro pw_eye(target) -%}
 <button type="button" class="pw-eye" data-pw="{{ target }}"
@@ -32,14 +39,15 @@
 
 {% macro pw_eye_script() -%}
 <script>
-// Swapping .type in place keeps the field's value and every listener bound to
-// it — the login page's rhythm capture is attached to the password input
+// Toggling the mask CLASS keeps the field's value, its type and every listener
+// bound to it — the login page's rhythm capture is attached to this input
 // itself, so replacing the element instead would silently kill the capture.
+// It also never touches .type, which is what kept the password manager out.
 document.querySelectorAll(".pw-eye").forEach((eye) => {
   eye.addEventListener("click", () => {
     const field = document.getElementById(eye.dataset.pw);
-    const shown = field.type === "password";
-    field.type = shown ? "text" : "password";
+    const shown = field.classList.contains("masked");
+    field.classList.toggle("masked", !shown);
     eye.classList.toggle("on", shown);
     eye.setAttribute("aria-pressed", shown ? "true" : "false");
     eye.setAttribute("aria-label", shown ? "Hide password" : "Show password");

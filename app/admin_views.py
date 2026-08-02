@@ -23,6 +23,8 @@ from app import app
 from app.auth import admin_required, current_admin
 from app.config import (
     ADMIN_ENROLL_SAMPLES,
+    ADMIN_RHYTHM_MARGIN,
+    ADMIN_RHYTHM_REQUIRED,
     FAIL_LOCK_STREAK,
     LOCK_COOLDOWN_MIN,
     PHRASE,
@@ -57,8 +59,21 @@ from app.ids import (
 def admin_login_page():
     if current_admin() is not None:
         return redirect(url_for("admin_dashboard"))
+    # Whether the card promises the rhythm factor or announces first-time setup.
+    # Deliberately an INSTALL-level fact -- "no admin has enrolled a rhythm yet"
+    # -- and not a lookup on the typed username: this page is unauthenticated and
+    # the username box is editable, so answering it per account would hand an
+    # attacker an oracle for which admin is still single-factor. The flag fails
+    # closed: the moment any admin enrolls it reverts to the two-factor copy, and
+    # a profile-less admin is still routed into enrollment by api_admin_login()
+    # once the password checks out, so the worst case is understated copy.
+    enrolled = get_db().execute(
+        "SELECT COUNT(*) c FROM admins WHERE profile_json IS NOT NULL"
+    ).fetchone()["c"]
     return render_template("admin.html", logged_in=False,
-                           admin_enroll_samples=ADMIN_ENROLL_SAMPLES)
+                           admin_enroll_samples=ADMIN_ENROLL_SAMPLES,
+                           rhythm_required=ADMIN_RHYTHM_REQUIRED,
+                           rhythm_pending=ADMIN_RHYTHM_REQUIRED and not enrolled)
 
 
 @app.route("/admin/dashboard")
@@ -397,6 +412,13 @@ def admin_policy():
          "desc": f"Freeze an account after {FAIL_LOCK_STREAK} consecutive non-accepted attempts "
                  f"and refuse it for {LOCK_COOLDOWN_MIN} minutes, before any scoring runs.",
          "on": FAIL_LOCK_STREAK > 0},
+        {"title": "Keystroke rhythm on the admin console",
+         "desc": f"Require the admin's typing rhythm as a second factor at sign-in, enrolled "
+                 f"over {ADMIN_ENROLL_SAMPLES} repetitions of the password and accepted within "
+                 f"{ADMIN_RHYTHM_MARGIN}x the enrolled threshold. Off, /admin is password-only "
+                 f"and a guessed or stolen admin password is the entire defence; enrolled "
+                 f"profiles are kept, so turning it back on restores the factor unchanged.",
+         "on": ADMIN_RHYTHM_REQUIRED},
         {"title": "Rate limit verification",
          "desc": f"Cap each client IP at {RATE_LIMIT_MAX} verification calls per "
                  f"{RATE_LIMIT_WINDOW} seconds, each admin sign-in at "
@@ -483,6 +505,7 @@ def admin_account():
     return render_template(
         "account.html",
         account=account,
+        rhythm_required=ADMIN_RHYTHM_REQUIRED,
         has_rhythm=account["profile_json"] is not None,
         actions=actions,
         n_sessions=n_sessions,

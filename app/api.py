@@ -34,6 +34,7 @@ from app.auth import (
 )
 from app.config import (
     ADMIN_ENROLL_SAMPLES,
+    ADMIN_RHYTHM_REQUIRED,
     ADMIN_RATE_LIMIT_MAX,
     ADMIN_RATE_LIMIT_WINDOW,
     ADMIN_RHYTHM_MARGIN,
@@ -393,6 +394,13 @@ def api_admin_login():
     if admin is None or not check_password_hash(admin["password_hash"], password):
         return jsonify(error="invalid credentials"), 401
 
+    # Master switch off: the password is the whole login. Checked after the
+    # password rather than before, so a disabled factor never shortens the path
+    # an attacker walks -- and any enrolled profile is read past, not deleted,
+    # which is what lets the switch be flipped back without re-enrollment.
+    if not ADMIN_RHYTHM_REQUIRED:
+        return issue_admin_session(db, admin["id"])
+
     if admin["profile_json"] is None:
         return jsonify(ok=False, enroll_rhythm=True, samples_needed=ADMIN_ENROLL_SAMPLES)
 
@@ -423,6 +431,12 @@ def api_admin_enroll_rhythm():
     allowed while the admin has no profile -- re-enrollment would let a stolen
     password overwrite the biometric factor.
     """
+    # The UI never reaches this while the factor is off (api_admin_login stops
+    # returning enroll_rhythm), but the endpoint is password-guarded and public,
+    # so it refuses on its own account: a switched-off factor must not still be
+    # accepting biometric writes from anyone holding the password.
+    if not ADMIN_RHYTHM_REQUIRED:
+        return jsonify(error="the admin keystroke factor is disabled"), 409
     # Guarded by the password, so it is guessable in exactly the same way the
     # login is -- and it writes the biometric factor, so it gets the same budget.
     if rate_limited(client_ip(), ADMIN_RATE_LIMIT_MAX, ADMIN_RATE_LIMIT_WINDOW, "admin"):
@@ -527,6 +541,12 @@ def api_admin_reset_rhythm():
     every session including this one -- the admin comes back through /admin,
     where the login flow collects the new samples.
     """
+    # Refused while the factor is off, for the same reason enrollment is: with
+    # nothing to re-enroll on the way back in, this would only destroy a profile
+    # that the switch is meant to preserve, and sign every console out to do it.
+    if not ADMIN_RHYTHM_REQUIRED:
+        return jsonify(error="the admin keystroke factor is disabled"), 409
+
     data = request.get_json(silent=True) or {}
     password = data.get("password") or ""
 

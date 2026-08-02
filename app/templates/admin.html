@@ -24,22 +24,44 @@
           <div class="mono-label">SECURITY&nbsp;CONSOLE</div>
         </div>
       </div>
-      <span class="chip">ADMIN</span>
+      {% if rhythm_pending %}
+        <span class="chip chip-warn">FIRST-TIME SETUP</span>
+      {% elif not rhythm_required %}
+        <span class="chip chip-warn">PASSWORD ONLY</span>
+      {% else %}
+        <span class="chip">ADMIN</span>
+      {% endif %}
     </div>
 
     <div class="step-title" id="login-title">Sign in</div>
-    <div class="step-sub" id="login-sub">Monitoring, intrusion alerts and account controls for
-      your workspace. Type your password and press Enter — your typing rhythm is part of the
-      login.</div>
+    {# Both branches are replaced wholesale by startEnroll() once the password is
+       accepted, so this copy only has to be true for the password step. #}
+    <div class="step-sub" id="login-sub">
+      {%- if not rhythm_required -%}
+        Monitoring, intrusion alerts and account controls for your workspace. The keystroke
+        factor is switched off on this console — your password alone signs you in.
+      {%- elif rhythm_pending -%}
+        This console has no typing rhythm on record yet. Enter your password — you'll then
+        type it {{ admin_enroll_samples }} times so Sentinel can learn the rhythm, and it
+        becomes a second factor from the next sign-in on.
+      {%- else -%}
+        Monitoring, intrusion alerts and account controls for your workspace. Type your
+        password and press Enter — your typing rhythm is part of the login.
+      {%- endif -%}
+    </div>
 
     <label class="field-label" for="u">Username</label>
     <input id="u" class="input" value="admin" autocomplete="off" spellcheck="false">
 
     <label class="field-label" for="p">Password</label>
-    <!-- new-password + no name stops the browser autofilling a saved password;
-         autofill fires no keystrokes, so it would also defeat the rhythm check. -->
+    <!-- A masked text input, not type="password", and no name. The password
+         manager binds to the type, and all three of its offers break this page:
+         a generated password cannot be typed back over the enrollment samples,
+         a saved one gets autofilled, and autofill fires no keystrokes at all —
+         so the field this rhythm check reads would arrive with nothing to read.
+         The admin has to type it. See .input.masked in sentinel.css. -->
     <div class="pw-field">
-      <input id="p" class="input" type="password" autocomplete="new-password"
+      <input id="p" class="input masked" type="text" autocomplete="off"
              autocorrect="off" autocapitalize="off" spellcheck="false"
              data-lpignore="true" data-1p-ignore data-form-type="other">
       {{ pw_eye("p") }}
@@ -55,7 +77,15 @@
     <button class="btn btn-accent btn-block" id="login-btn">Log in</button>
 
     <div class="card-foot">
-      <span class="mono-label">password + keystroke rhythm · 8h session</span>
+      <span class="mono-label">
+        {%- if not rhythm_required -%}
+          password only · 8h session
+        {%- elif rhythm_pending -%}
+          step 1 of 2 · password → rhythm enrollment
+        {%- else -%}
+          password + keystroke rhythm · 8h session
+        {%- endif -%}
+      </span>
       <a class="btn btn-ghost btn-xs" href="/">← Demo</a>
     </div>
   </div>

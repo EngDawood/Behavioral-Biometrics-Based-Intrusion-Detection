@@ -91,9 +91,14 @@
           {{ required_samples }} times. Nothing changes until the last sample lands.</div>
 
         <label class="field-label" for="old-phrase">CURRENT PHRASE</label>
+        <!-- Masked text, not type="password": the new-phrase field below already
+             keeps password managers out for the reason in its own comment, and
+             leaving this one a real password field is what invites the browser
+             to offer to save the phrase it is about to replace. -->
         <div class="pw-field">
-          <input id="old-phrase" class="input mono" type="password" autocomplete="current-password"
-                 autocorrect="off" autocapitalize="off" spellcheck="false">
+          <input id="old-phrase" class="input mono masked" type="text" autocomplete="off"
+                 autocorrect="off" autocapitalize="off" spellcheck="false"
+                 data-lpignore="true" data-1p-ignore data-form-type="other">
           {{ pw_eye("old-phrase") }}
         </div>
 

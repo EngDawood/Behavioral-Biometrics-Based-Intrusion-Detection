@@ -20,8 +20,10 @@
         <h2>My account</h2>
         <div class="sub">Your own credentials — both factors — and the actions you've taken.</div>
       </div>
-      <span class="chip {% if has_rhythm %}chip-ok{% else %}chip-warn{% endif %}">
-        {% if has_rhythm %}✓ 2 FACTORS{% else %}! PASSWORD ONLY{% endif %}
+      <span class="chip {% if has_rhythm and rhythm_required %}chip-ok{% else %}chip-warn{% endif %}">
+        {% if not rhythm_required %}! RHYTHM FACTOR OFF
+        {% elif has_rhythm %}✓ 2 FACTORS
+        {% else %}! PASSWORD ONLY{% endif %}
       </span>
     </div>
 
@@ -42,8 +44,11 @@
           </div>
           <div class="kv">
             <div class="k">RHYTHM FACTOR</div>
-            <div class="v {% if has_rhythm %}ok{% else %}warn{% endif %}">
-              {% if has_rhythm %}Enrolled{% else %}Not enrolled{% endif %}
+            <div class="v {% if has_rhythm and rhythm_required %}ok{% else %}warn{% endif %}">
+              {% if not rhythm_required %}
+                {{ "Enrolled, not enforced" if has_rhythm else "Disabled" }}
+              {% elif has_rhythm %}Enrolled
+              {% else %}Not enrolled{% endif %}
             </div>
           </div>
           <div class="kv">
@@ -61,21 +66,31 @@
       </div>
       <div class="box-body">
         <div class="form">
+          <!-- Masked text inputs, not type="password": a browser-generated
+               password here is one the admin has never typed, and the very next
+               login asks them to type it {{ admin_enroll_samples }} times to
+               re-learn the rhythm. See .input.masked in sentinel.css. -->
           <label class="field-label" for="old-pw">CURRENT PASSWORD</label>
           <div class="pw-field">
-            <input id="old-pw" class="input" type="password" autocomplete="current-password">
+            <input id="old-pw" class="input masked" type="text" autocomplete="off"
+                   autocorrect="off" autocapitalize="off" spellcheck="false"
+                   data-lpignore="true" data-1p-ignore data-form-type="other">
             {{ pw_eye("old-pw") }}
           </div>
 
           <label class="field-label" for="new-pw">NEW PASSWORD</label>
           <div class="pw-field">
-            <input id="new-pw" class="input" type="password" autocomplete="new-password">
+            <input id="new-pw" class="input masked" type="text" autocomplete="off"
+                   autocorrect="off" autocapitalize="off" spellcheck="false"
+                   data-lpignore="true" data-1p-ignore data-form-type="other">
             {{ pw_eye("new-pw") }}
           </div>
 
           <label class="field-label" for="new-pw2">CONFIRM NEW PASSWORD</label>
           <div class="pw-field">
-            <input id="new-pw2" class="input" type="password" autocomplete="new-password">
+            <input id="new-pw2" class="input masked" type="text" autocomplete="off"
+                   autocorrect="off" autocapitalize="off" spellcheck="false"
+                   data-lpignore="true" data-1p-ignore data-form-type="other">
             {{ pw_eye("new-pw2") }}
           </div>
 
@@ -87,10 +102,17 @@
 
         <div class="note">
           <span class="accent">◈</span>
+          {% if rhythm_required %}
           <div>Your rhythm profile was learned from the way you type <em>this</em> password, so
             changing it clears that profile — the next login will ask you to type the new password
             {{ admin_enroll_samples }} times to re-learn it. Any other console signed in on the old
             password is signed out; this one stays.</div>
+          {% else %}
+          <div>A rhythm profile is learned from the way you type <em>this</em> password, so changing
+            it clears any profile on record — and with the factor switched off, nothing re-learns
+            one until it is switched back on. Any other console signed in on the old password is
+            signed out; this one stays.</div>
+          {% endif %}
         </div>
       </div>
     </div>
@@ -98,10 +120,19 @@
     <div class="box policy">
       <div class="box-head">
         <span class="t">Keystroke rhythm</span>
-        <span class="n">{{ "enrolled" if has_rhythm else "awaiting enrollment" }}</span>
+        <span class="n">
+          {%- if not rhythm_required -%}disabled
+          {%- elif has_rhythm -%}enrolled
+          {%- else -%}awaiting enrollment{%- endif -%}
+        </span>
       </div>
       <div class="box-body">
-        {% if has_rhythm %}
+        {% if not rhythm_required %}
+        <div class="empty">The keystroke factor is switched off for this console
+          (ADMIN_RHYTHM_REQUIRED), so sign-in is password-only and neither enrollment nor
+          reset is available.{% if has_rhythm %} Your enrolled profile is kept as it is and
+          takes effect again the moment the switch goes back on.{% endif %}</div>
+        {% elif has_rhythm %}
         <div class="form">
           <div class="hint">If your typing has drifted far enough that login keeps failing, drop the
             profile and enroll it again. Confirm with your password — the same guard that protects
@@ -109,7 +140,9 @@
 
           <label class="field-label" for="reset-pw">PASSWORD</label>
           <div class="pw-field">
-            <input id="reset-pw" class="input" type="password" autocomplete="current-password">
+            <input id="reset-pw" class="input masked" type="text" autocomplete="off"
+                   autocorrect="off" autocapitalize="off" spellcheck="false"
+                   data-lpignore="true" data-1p-ignore data-form-type="other">
             {{ pw_eye("reset-pw") }}
           </div>
 
@@ -192,8 +225,10 @@ $("pw-btn").addEventListener("click", async () => {
     showMsg("pw-msg", out.error || "Could not change the password.", false);
     return;
   }
-  showMsg("pw-msg", "Password changed. Your rhythm profile was cleared — the next login " +
-                    "will re-enroll it.", true);
+  showMsg("pw-msg", "Password changed. {% if rhythm_required %}Your rhythm profile was " +
+                    "cleared — the next login will re-enroll it.{% else %}Any rhythm profile " +
+                    "was cleared; the keystroke factor is off, so none is re-learned.{% endif %}",
+          true);
   ["old-pw", "new-pw", "new-pw2"].forEach(id => $(id).value = "");
   setTimeout(() => location.reload(), 2500);
 });
