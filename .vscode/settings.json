@@ -1,0 +1,20 @@
+{
+  // Folder-scope mirror of the Python block in Sentinel.code-workspace, so that
+  // opening this repo as a plain folder behaves the same as opening the
+  // workspace file. Folder settings WIN over the .code-workspace ones -- if you
+  // change the interpreter path in one place, change it in both.
+  //
+  // The venv lives at .venv/ on this Windows box; point the Python extension
+  // straight at it so the integrated terminal and the debugger agree.
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
+
+  // Activate .venv in every terminal the extension creates from now on.
+  "python.terminal.activateEnvironment": true,
+
+  // ...and in the terminal VS Code restores at window startup, which the
+  // setting above does not cover (it only fires on terminal creation).
+  "python.terminal.activateEnvInCurrentTerminal": true,
+
+  "python.analysis.extraPaths": ["${workspaceFolder}"],
+  "python.analysis.typeCheckingMode": "basic"
+}
