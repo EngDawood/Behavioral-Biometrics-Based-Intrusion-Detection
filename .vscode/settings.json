@@ -4,16 +4,29 @@
   // workspace file. Folder settings WIN over the .code-workspace ones -- if you
   // change the interpreter path in one place, change it in both.
   //
-  // The venv lives at .venv/ on this Windows box; point the Python extension
-  // straight at it so the integrated terminal and the debugger agree.
+  // Do NOT set "python.useEnvironmentsExtension" here. User settings.json turns
+  // it on globally, and overriding it to false at folder scope crashes
+  // ms-python.python during activation:
+  //   TypeError: Cannot read properties of undefined (reading
+  //   'onDidChangeEnvironment')  at t.createEnvExtApi
+  // The setting is machine-overridable, so a folder-scope override leaves the
+  // extension half-wired. Configure the envs extension instead -- below.
+
+  // Treat the repo root as one Python project managed by venv, so the
+  // Environments extension discovers .venv/ (its workspaceSearchPaths default
+  // already covers ".venv") and activates it in terminals it creates.
+  "python-envs.pythonProjects": [
+    {
+      "path": ".",
+      "envManager": "ms-python.python:venv",
+      "packageManager": "ms-python.python:pip"
+    }
+  ],
+  "python-envs.terminal.autoActivationType": "command",
+
+  // Fallback for the classic code path, and what Pylance reads: the venv lives
+  // at .venv/ on this Windows box.
   "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
-
-  // Activate .venv in every terminal the extension creates from now on.
-  "python.terminal.activateEnvironment": true,
-
-  // ...and in the terminal VS Code restores at window startup, which the
-  // setting above does not cover (it only fires on terminal creation).
-  "python.terminal.activateEnvInCurrentTerminal": true,
 
   "python.analysis.extraPaths": ["${workspaceFolder}"],
   "python.analysis.typeCheckingMode": "basic"

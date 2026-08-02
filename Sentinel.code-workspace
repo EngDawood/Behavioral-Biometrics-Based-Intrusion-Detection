@@ -17,9 +17,36 @@
     // The venv lives at .venv/ on this Windows box; point the Python extension
     // straight at it so the integrated terminal and the debugger agree.
     "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
-    "python.terminal.activateEnvironment": true,
     "python.analysis.extraPaths": ["${workspaceFolder}"],
     "python.analysis.typeCheckingMode": "basic",
+
+    // Terminal activation. ms-python.vscode-python-envs is installed and user
+    // settings.json enables it globally ("python.useEnvironmentsExtension":
+    // true), so THAT extension owns activation and the legacy
+    // python.terminal.activateEnvironment below is ignored. Declare the repo
+    // root as a venv-managed project so it discovers .venv/ and activates it in
+    // terminals it creates.
+    //
+    // Do NOT set "python.useEnvironmentsExtension": false here to force the old
+    // path -- the setting is machine-overridable, and overriding it below user
+    // scope crashes ms-python.python on startup with
+    //   TypeError: Cannot read properties of undefined (reading
+    //   'onDidChangeEnvironment')  at t.createEnvExtApi
+    //
+    // .venv still has to be picked once via "Python: Select Environment"; the
+    // envs extension keeps its own selection state and never reads
+    // python.defaultInterpreterPath.
+    "python-envs.pythonProjects": [
+      {
+        "path": ".",
+        "envManager": "ms-python.python:venv",
+        "packageManager": "ms-python.python:pip"
+      }
+    ],
+    "python-envs.terminal.autoActivationType": "command",
+
+    // Legacy fallback, used only if the envs extension is ever turned off.
+    "python.terminal.activateEnvironment": true,
 
     // demo.db is a binary artefact rebuilt by init_db(); .venv and __pycache__
     // are noise. Hidden from the tree, and kept out of search results.
